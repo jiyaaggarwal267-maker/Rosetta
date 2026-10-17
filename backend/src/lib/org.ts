@@ -109,6 +109,10 @@ export const personOf = (u: User, users: User[]) => {
     status: u.status,
     managerId: u.managerId,
     team: team ? { id: team.id, name: team.teamName || `${team.name.split(" ")[0]}'s team` } : null,
+    /** Made by "Add a sample team": not a real person. */
+    sample: isSamplePerson(u),
   };
 };
+
+export const isSamplePerson = (u: Pick<User, "email">) => u.email.endsWith("@demo.rosetta.dev");
 export type Person = ReturnType<typeof personOf>;

@@ -5,6 +5,7 @@ import { DEMO_COMMENTS, DEMO_TEAM, SAMPLES } from "@/lib/demo/samples";
 import { ApiError, json, preflight, route } from "@/lib/http";
 import { LEVELS, type LevelKey } from "@/lib/levels";
 import { isLead, requireOrg } from "@/lib/org";
+import { notifications } from "@/lib/notify";
 import { store } from "@/lib/store";
 import type { Comment, StoredCard, StoredUser, Ticket, Translated } from "@/lib/types";
 
@@ -139,6 +140,13 @@ export const POST = route(async (req) => {
     updatedAt: ago(2 * HOUR),
   };
   await store.set("tickets", ticket.id, ticket);
+
+  // What the lead's bell would have shown over the last day.
+  for (const s of SAMPLES) {
+    await notifications.change({ orgId: org.id, to: lead.id, authorName: authorOf[s.key].name, title: s.card.explanation.title, cardId: cardIds[s.key] });
+  }
+  await notifications.reviewed({ orgId: org.id, to: lead.id, authorName: team.arjun.name, title: SAMPLES[0].card.explanation.title, cardId: cardIds["round-robin"] });
+  await notifications.reply({ orgId: org.id, to: lead.id, fromName: team.rahul.name, subject: ticket.subject, ticketId: ticket.id });
 
   return json(
     {

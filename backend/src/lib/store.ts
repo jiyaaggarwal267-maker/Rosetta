@@ -16,7 +16,11 @@ export type Collection =
   | "notes"
   | "comments"
   | "tickets"
-  | "resets";
+  | "resets"
+  | "usage"
+  | "notifications"
+  | "checks"
+  | "deleted";
 
 interface Store {
   get<T>(collection: Collection, id: string): Promise<T | null>;
@@ -24,6 +28,8 @@ interface Store {
   remove(collection: Collection, id: string): Promise<void>;
   /** Every document where `field` equals `value` (one equality filter). */
   list<T>(collection: Collection, field: string, value: string): Promise<T[]>;
+  /** Every document in a collection. Only for small ones, like orgs in the weekly job. */
+  all<T>(collection: Collection): Promise<T[]>;
 }
 
 class FirestoreStore implements Store {
@@ -83,6 +89,11 @@ class FirestoreStore implements Store {
     const snap = await (await this.db).collection(collection).where(field, "==", value).get();
     return snap.docs.map((d) => this.decode<T>(d.data())!);
   }
+
+  async all<T>(collection: Collection) {
+    const snap = await (await this.db).collection(collection).get();
+    return snap.docs.map((d) => this.decode<T>(d.data())!);
+  }
 }
 
 class FileStore implements Store {
@@ -117,6 +128,10 @@ class FileStore implements Store {
     return Object.values(this.data[collection] ?? {})
       .filter((doc) => (doc as Record<string, unknown>)[field] === value)
       .map((doc) => structuredClone(doc) as T);
+  }
+
+  async all<T>(collection: Collection) {
+    return Object.values(this.data[collection] ?? {}).map((doc) => structuredClone(doc) as T);
   }
 }
 

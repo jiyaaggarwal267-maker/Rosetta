@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { ApiError, json, preflight, route } from "@/lib/http";
+import { heirOf, moveReports, removeMember } from "@/lib/account";
 import { CAN_ADD, descendants, orgMembers, personOf, requireOrg } from "@/lib/org";
 import { roleSchema } from "@/lib/profile";
 import { store } from "@/lib/store";
@@ -21,15 +22,6 @@ const patchSchema = z.object({
   role: roleSchema.optional(),
   managerId: z.string().optional(),
 });
-
-/** Whoever takes over someone's direct reports: the person above them, or the owner. */
-const heirOf = (member: User, org: Org) => member.managerId ?? org.ownerId;
-
-async function moveReports(from: User, to: string, users: StoredUser[], now: string) {
-  for (const u of users.filter((x) => x.managerId === from.id)) {
-    await store.set("users", u.id, { ...u, managerId: to, updatedAt: now });
-  }
-}
 
 /**
  * PATCH /api/team/members/:id
@@ -103,22 +95,6 @@ export const DELETE = route<Ctx>(async (req, { params }) => {
   const users = await orgMembers(org.id);
   const member = users.find((u) => u.id === id);
   if (!member) throw new ApiError("not_found");
-  const now = new Date().toISOString();
-  const heir = heirOf(member, org);
-
-  await moveReports(member, heir, users, now);
-
-  // Their explained changes stay visible to the team they were in.
-  const cards = await store.list<StoredCard>("cards", "orgId", org.id);
-  for (const c of cards.filter((k) => k.authorUserId === id || k.createdBy === id)) {
-    await store.set("cards", c.id, {
-      ...c,
-      authorUserId: c.authorUserId === id ? undefined : c.authorUserId,
-      createdBy: c.createdBy === id || c.authorUserId === id ? heir : c.createdBy,
-    });
-  }
-
-  if (member.inviteCode) await store.remove("invites", member.inviteCode);
-  await store.remove("users", id);
+  await removeMember(org, member, users);
   return json({ removed: id });
 });

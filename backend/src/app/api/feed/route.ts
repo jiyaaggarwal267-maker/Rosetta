@@ -8,12 +8,14 @@ import { syncIsStale, syncOrg } from "@/lib/sync";
 import type { Comment, StoredCard, Ticket } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+// Explaining, checking and one rewrite can take a couple of minutes (the Vercel Hobby maximum is 300 s).
+export const maxDuration = 300;
 export const OPTIONS = preflight;
 
 const WEEK = 7 * 86_400_000;
 
 /**
- * GET /api/feed?author=&team=&status=
+ * GET /api/feed?author=&team=&status=&q=&risk=&repo=&days=&offset=&limit=
  * The changes this person should see, at their reading level:
  * an engineer sees their own, a manager their team's, a CMO everyone's.
  */
@@ -46,8 +48,27 @@ export const GET = route(async (req) => {
   }
   if (status === "draft" || status === "approved") filtered = filtered.filter((c) => c.status === status);
 
-  const items = filtered
-    .sort((a, b) => b.committedAt.localeCompare(a.committedAt))
+  // Search reads the viewer's own version, so a CMO can search in CMO words.
+  const q = params.get("q")?.trim().toLowerCase();
+  if (q) {
+    filtered = filtered.filter((c) => {
+      const l = c.explanation.levels[me.role];
+      return [c.explanation.title, l.summary, l.impact, c.repo, c.author.name, ...c.explanation.files].some((t) => t?.toLowerCase().includes(q));
+    });
+  }
+  const risk = params.get("risk");
+  if (risk === "low" || risk === "medium" || risk === "high") filtered = filtered.filter((c) => c.explanation.risk === risk);
+  const repo = params.get("repo")?.toLowerCase();
+  if (repo) filtered = filtered.filter((c) => c.repo.toLowerCase() === repo);
+  const days = Number(params.get("days"));
+  if (days > 0) filtered = filtered.filter((c) => Date.now() - new Date(c.committedAt).getTime() < days * 86_400_000);
+
+  const sorted = filtered.sort((a, b) => b.committedAt.localeCompare(a.committedAt));
+  const limit = Math.min(100, Math.max(1, Number(params.get("limit")) || 20));
+  const offset = Math.max(0, Number(params.get("offset")) || 0);
+  const page = sorted.slice(offset, offset + limit);
+
+  const items = page
     .map((c) =>
       feedItem(c, me, users, {
         comments: comments.filter((m) => m.cardId === c.id).length,
@@ -67,6 +88,8 @@ export const GET = route(async (req) => {
   const now = Date.now();
   return json({
     items,
+    page: { offset, limit, total: sorted.length, more: offset + limit < sorted.length },
+    repos: [...new Set(visible.map((c) => c.repo))].sort(),
     people,
     teams,
     myTeam: teamOf(me, users) ? personOf(me, users).team : null,

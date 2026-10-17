@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { toast } from "sonner";
 import { SAMPLES } from "@/lib/mock/samples";
 import { ROLES } from "@/lib/roles";
 import { useSession } from "@/lib/session";
@@ -13,20 +14,27 @@ import { HowItWorks as FlowWalkthrough } from "./flowchart";
 import { InkTexture } from "./ink-texture";
 import { MiniDemo } from "./mini-demo";
 import { Nav } from "./nav";
+import { SiteFooter } from "./site-footer";
 import { ThemeToggle } from "./theme-toggle";
 
-const SOURCE_URL = process.env.NEXT_PUBLIC_SOURCE_URL || "https://github.com/code-crunchers/rosetta";
 const DEMO = SAMPLES[0].card.explanation;
 
 /** Home: what Rosetta is, who it's for, and the way in. */
 export function LandingView() {
+  // Arriving here right after deleting an account.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("deleted") !== "1") return;
+    toast("Your account is deleted.");
+    window.history.replaceState(null, "", "/");
+  }, []);
+
   return (
     <>
       <Nav>
         <AccountNav />
         <ThemeToggle />
       </Nav>
-      <main>
+      <main id="main" tabIndex={-1}>
         <Hero />
         <Gap />
         <Readers />
@@ -34,9 +42,10 @@ export function LandingView() {
         <HowItWorks />
         <AskWhy />
         <Promises />
+        <Pricing />
         <Closing />
       </main>
-      <Footer />
+      <SiteFooter />
     </>
   );
 }
@@ -302,8 +311,14 @@ function AskWhy() {
 
 const PROMISES = [
   { title: "The engineer stays in control", body: "Every card is a draft until the person who wrote the code approves it." },
-  { title: "Your code isn't kept", body: "Diffs are read, explained and dropped. Only the explanation is saved." },
-  { title: "It never makes things up", body: "Rosetta is told to explain only what's in the change, and lists every file it read." },
+  {
+    title: "Your full code isn't kept",
+    body: "Diffs are read from GitHub and sent to the AI to explain. Rosetta saves the explanation and a few lines behind each step, not the diff.",
+  },
+  {
+    title: "Every explanation is checked",
+    body: "A second model and plain code rules score each one against the real diff, and every box links to the lines behind it.",
+  },
 ];
 
 function Promises() {
@@ -321,7 +336,28 @@ function Promises() {
   );
 }
 
-/* ---------- 7. Closing ---------- */
+/* ---------- 7. Pricing ---------- */
+
+function Pricing() {
+  return (
+    <Section id="pricing" className="py-16 md:py-20">
+      <div className="grid gap-6 rounded-md bg-surface-1 p-6 shadow-elev-1 sm:p-8 md:grid-cols-[1fr_auto] md:items-center">
+        <div className="max-w-[40rem]">
+          <h2 className="t-heading text-fg-1">Free while Rosetta is in early access</h2>
+          <p className="mt-2 t-body text-fg-2">
+            There are no paid plans yet, and nothing asks for payment details. When paid plans arrive, they&rsquo;ll be for the people who write code;
+            everyone who reads stays free. Prices, taxes and the refund policy will be shown before anyone pays.
+          </p>
+        </div>
+        <Link href="/refunds" className={cn(buttonStyles({ variant: "secondary" }), "justify-self-start")}>
+          Refund Policy
+        </Link>
+      </div>
+    </Section>
+  );
+}
+
+/* ---------- 8. Closing ---------- */
 
 function Closing() {
   const { user } = useSession();
@@ -340,13 +376,3 @@ function Closing() {
   );
 }
 
-function Footer() {
-  return (
-    <footer className="mx-auto flex max-w-(--w-app) flex-wrap items-center justify-between gap-4 px-(--gutter) pt-8 pb-12 t-small text-fg-3">
-      <p>Built for Devlympics 2026</p>
-      <a href={SOURCE_URL} target="_blank" rel="noreferrer" className="transition-[color] duration-150 hover:text-fg-1">
-        Source code
-      </a>
-    </footer>
-  );
-}

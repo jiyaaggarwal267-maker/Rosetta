@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { isPitchCommit } from "./demo/pitch";
+import { PITCH_QUESTION } from "./demo/pitch-script";
 import { z } from "zod";
 import { SAMPLES } from "./demo/samples";
 import type { ParsedLink } from "./github-url";
@@ -26,8 +28,12 @@ export function publicCard(card: StoredCard, viewer: User, users: User[]) {
   const { headSha: _h, reading: _r, findings: _f, createdBy: _c, approvedAt: _p, ...rest } = card;
   const authorUser = users.find((u) => u.id === (card.authorUserId ?? card.createdBy));
   const reviewer = canReview(viewer, card);
+  const v = card.explanation.verification;
+  // The list of problems is for people who can judge the code.
+  const explanation = v && !reviewer && !isTechnical(viewer.role) ? { ...card.explanation, verification: { ...v, issues: [] } } : card.explanation;
   return {
-    ...(rest as Card & Pick<StoredCard, "orgId" | "source" | "createdAt" | "authorUserId">),
+    ...(rest as Card & Pick<StoredCard, "orgId" | "source" | "createdAt" | "authorUserId" | "reports">),
+    explanation,
     authorPerson: authorUser ? personOf(authorUser, users) : null,
     viewer: {
       level: viewer.role,
@@ -36,8 +42,16 @@ export function publicCard(card: StoredCard, viewer: User, users: User[]) {
       canAsk: !reviewer,
       canComment: isTechnical(viewer.role) || reviewer,
     },
+    // The pitch commit offers its scripted question in Ask Why.
+    ...(isPitchCommit(card.repo, card.headSha) ? { suggestedQuestion: PITCH_QUESTION.text } : {}),
   };
 }
+
+/** The badge a feed shows: score and whether the engineer should look first. */
+const confidenceOf = (card: StoredCard) => {
+  const v = card.explanation.verification;
+  return v ? { score: v.score, level: v.confidence, checkedBy: v.checkedBy, needsReview: v.needsReview && card.status !== "approved" } : null;
+};
 
 /** One line per card for feeds, at the viewer's level. */
 export function feedItem(card: StoredCard, viewer: User, users: User[], extra: { comments: number; openQuestions: number }) {
@@ -57,6 +71,10 @@ export function feedItem(card: StoredCard, viewer: User, users: User[], extra: {
     author: authorUser ? personOf(authorUser, users) : null,
     authorName: authorUser?.name ?? card.author.name,
     files: card.files.length,
+    /** One of the built-in sample changes, not real work. */
+    sample: card.source === "demo",
+    confidence: confidenceOf(card),
+    reports: card.reports ?? 0,
     ...extra,
   };
 }

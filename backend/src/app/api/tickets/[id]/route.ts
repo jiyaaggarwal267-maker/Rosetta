@@ -7,6 +7,7 @@ import { orgMembers } from "@/lib/org";
 import { store } from "@/lib/store";
 import { ticketDetail } from "@/lib/tickets";
 import { sendReply } from "@/lib/mail";
+import { notifications } from "@/lib/notify";
 import { backfill, translateTicketMessageLater } from "@/lib/translate";
 import type { StoredCard, Ticket, User } from "@/lib/types";
 
@@ -59,6 +60,7 @@ export const POST = route<Ctx>(async (req, { params }) => {
   await store.set("tickets", id, ticket);
   after(() => translateTicketMessageLater(id, messageId, me.name, card?.explanation.title ?? ticket.subject));
   const other = users.find((u) => u.id === otherId);
+  if (other) after(() => notifications.reply({ orgId: me.orgId, to: other.id, fromName: me.name, subject: ticket.subject, ticketId: id }));
   if (other) after(() => sendReply({ to: other.email, fromName: me.name, subject: ticket.subject, text, ticketId: id }));
   return json({ ticket: ticketDetail(ticket, me, users, card) });
 });

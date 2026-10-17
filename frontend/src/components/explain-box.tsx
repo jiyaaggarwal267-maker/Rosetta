@@ -8,9 +8,11 @@ import { EXAMPLE_LINK, parseGitHubLink } from "@/lib/github-url";
 import { SAMPLES } from "@/lib/mock/samples";
 import type { ApiCode } from "@/lib/types";
 import { LinkInput } from "./link-input";
+import { AiNotice } from "./ai-notice";
 import { LoadingStory } from "./loading-story";
 
-type Phase = { kind: "idle" } | { kind: "loading"; title?: string; findings: string[]; writing: boolean };
+type Stage = "writing" | "checking" | "rewriting" | null;
+type Phase = { kind: "idle" } | { kind: "loading"; title?: string; findings: string[]; stage: Stage };
 
 /** Paste a commit link; the loading story narrates, then the card opens. */
 export function ExplainBox({ samples = false }: { samples?: boolean }) {
@@ -29,14 +31,14 @@ export function ExplainBox({ samples = false }: { samples?: boolean }) {
       return;
     }
     setError(null);
-    setPhase({ kind: "loading", findings: [], writing: false });
+    setPhase({ kind: "loading", findings: [], stage: null });
     try {
       const card = await explain(url, (event) =>
         setPhase((p) => {
           if (p.kind !== "loading") return p;
           if (event.type === "start") return { ...p, title: event.title };
           if (event.type === "finding") return { ...p, findings: [...p.findings, event.text] };
-          return { ...p, writing: true };
+          return { ...p, stage: event.type };
         }),
       );
       router.push(`/app/c/${card.id}`);
@@ -66,7 +68,8 @@ export function ExplainBox({ samples = false }: { samples?: boolean }) {
         describedBy={copy ? "explain-status" : undefined}
         inputRef={inputRef}
       />
-      <div id="explain-status" className="mt-3 min-h-6 px-1">
+      <AiNotice what="The commit's code is" className="mt-2 px-1" />
+      <div id="explain-status" className="mt-2 min-h-6 px-1">
         {copy && (
           <p role="alert" className="t-small font-medium text-fg-1">
             {copy.message}
@@ -76,7 +79,7 @@ export function ExplainBox({ samples = false }: { samples?: boolean }) {
       </div>
       {loading ? (
         <div className="mt-2">
-          <LoadingStory title={phase.title} findings={phase.findings} writing={phase.writing} />
+          <LoadingStory title={phase.title} findings={phase.findings} stage={phase.stage} />
         </div>
       ) : (
         samples && (

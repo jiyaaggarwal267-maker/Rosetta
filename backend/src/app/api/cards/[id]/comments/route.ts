@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { ApiError, json, preflight, readJson, route } from "@/lib/http";
 import { canReview, canSeeCard, isTechnical, orgMembers, personOf } from "@/lib/org";
 import { store } from "@/lib/store";
-import { display, translateCommentLater } from "@/lib/translate";
+import { displayFor, translateCommentLater } from "@/lib/translate";
 import type { Comment, StoredCard } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +41,7 @@ export const POST = route<Ctx>(async (req, { params }) => {
   await store.set("comments", comment.id, comment);
   after(() => translateCommentLater(comment.id, me.name, card.explanation.title));
   return json(
-    { comment: { id: comment.id, author: personOf(me, users), source: comment.source, createdAt: comment.createdAt, ...display(comment, me.role) } },
+    { comment: { id: comment.id, author: personOf(me, users), source: comment.source, createdAt: comment.createdAt, ...displayFor(comment, me) } },
     201,
   );
 });

@@ -1,0 +1,170 @@
+[
+  {
+    "name": "@base-ui/react",
+    "version": "1.9.0",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "runtime",
+    "homepage": "https://base-ui.com"
+  },
+  {
+    "name": "@tailwindcss/postcss",
+    "version": "4.3.3",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "development",
+    "homepage": "https://tailwindcss.com"
+  },
+  {
+    "name": "@types/node",
+    "version": "24.19.2",
+    "license": "MIT",
+    "app": "both",
+    "kind": "development",
+    "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/node"
+  },
+  {
+    "name": "@types/nodemailer",
+    "version": "8.0.2",
+    "license": "MIT",
+    "app": "backend",
+    "kind": "development",
+    "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/nodemailer"
+  },
+  {
+    "name": "@types/react",
+    "version": "19.3.0",
+    "license": "MIT",
+    "app": "both",
+    "kind": "development",
+    "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react"
+  },
+  {
+    "name": "@types/react-dom",
+    "version": "19.3.0",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "development",
+    "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react-dom"
+  },
+  {
+    "name": "class-variance-authority",
+    "version": "0.7.1",
+    "license": "Apache-2.0",
+    "app": "frontend",
+    "kind": "runtime",
+    "homepage": "https://github.com/joe-bell/cva#readme"
+  },
+  {
+    "name": "clsx",
+    "version": "2.1.1",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "runtime",
+    "homepage": "lukeed/clsx"
+  },
+  {
+    "name": "firebase-admin",
+    "version": "14.5.0",
+    "license": "Apache-2.0",
+    "app": "backend",
+    "kind": "runtime",
+    "homepage": "https://firebase.google.com/"
+  },
+  {
+    "name": "mermaid",
+    "version": "12.2.0",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "runtime",
+    "homepage": "https://github.com/mermaid-js/mermaid"
+  },
+  {
+    "name": "motion",
+    "version": "14.3.0",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "runtime",
+    "homepage": "https://github.com/motiondivision/motion"
+  },
+  {
+    "name": "next",
+    "version": "16.4.2",
+    "license": "MIT",
+    "app": "both",
+    "kind": "runtime",
+    "homepage": "https://nextjs.org"
+  },
+  {
+    "name": "next-themes",
+    "version": "0.4.6",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "runtime",
+    "homepage": "https://github.com/pacocoursey/next-themes"
+  },
+  {
+    "name": "nodemailer",
+    "version": "10.1.2",
+    "license": "MIT-0",
+    "app": "backend",
+    "kind": "runtime",
+    "homepage": "https://nodemailer.com/"
+  },
+  {
+    "name": "react",
+    "version": "19.3.1",
+    "license": "MIT",
+    "app": "both",
+    "kind": "runtime",
+    "homepage": "https://react.dev/"
+  },
+  {
+    "name": "react-dom",
+    "version": "19.3.1",
+    "license": "MIT",
+    "app": "both",
+    "kind": "runtime",
+    "homepage": "https://react.dev/"
+  },
+  {
+    "name": "sonner",
+    "version": "2.0.8",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "runtime",
+    "homepage": "https://sonner.emilkowal.ski/"
+  },
+  {
+    "name": "tailwindcss",
+    "version": "4.3.3",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "development",
+    "homepage": "https://tailwindcss.com"
+  },
+  {
+    "name": "typescript",
+    "version": "5.9.3",
+    "license": "Apache-2.0",
+    "app": "both",
+    "kind": "development",
+    "homepage": "https://www.typescriptlang.org/"
+  },
+  {
+    "name": "vaul",
+    "version": "1.1.2",
+    "license": "MIT",
+    "app": "frontend",
+    "kind": "runtime",
+    "homepage": "https://vaul.emilkowal.ski/"
+  },
+  {
+    "name": "zod",
+    "version": "4.6.7",
+    "license": "MIT",
+    "app": "backend",
+    "kind": "runtime",
+    "homepage": "https://zod.dev"
+  }
+]

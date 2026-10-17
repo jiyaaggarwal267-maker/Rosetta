@@ -5,14 +5,14 @@ import { toast } from "sonner";
 import * as api from "@/lib/api";
 import { isLead, roleLabel, ROLES } from "@/lib/roles";
 import { useSession } from "@/lib/session";
-import type { Member, Role, TeamView } from "@/lib/types";
+import type { AiUsage, Member, Role, TeamView } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
 import { Page } from "./app-shell";
 import { Button } from "./button";
 import { ComposeQuestion } from "./compose-question";
 import { ManageMember } from "./manage-member";
 import { Field, inputClass } from "./form";
-import { Avatar } from "./person";
+import { Avatar, SampleTag } from "./person";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000").replace(/\/$/, "");
 
@@ -72,7 +72,7 @@ export function Team() {
               {g.people.length === 0 ? (
                 <p className="mt-4 t-small text-fg-2">Nobody here yet.</p>
               ) : (
-                <ul className="mt-4 grid gap-1">
+                <ul className="mt-4 grid grid-cols-1 gap-1">
                   {g.people.map((m) => (
                     <MemberRow key={m.id} member={m} onAsk={() => setAsking(m.id)} onManage={team.isOwner ? () => setManaging(m) : undefined} />
                   ))}
@@ -83,8 +83,10 @@ export function Team() {
         </div>
 
         <aside className="grid min-w-0 grid-cols-1 gap-6 card:col-span-5">
+          {team.isOwner && <WorkspaceName />}
           {team.canAdd.length > 0 && <AddMember team={team} onAdded={load} />}
           {lead && <Repositories team={team} onSaved={load} />}
+          {lead && <AiQuota />}
         </aside>
       </div>
 
@@ -105,10 +107,13 @@ export function Team() {
 function MemberRow({ member, onAsk, onManage }: { member: Member; onAsk: () => void; onManage?: () => void }) {
   const joinLink = typeof window !== "undefined" && member.inviteCode ? `${window.location.origin}/join?code=${member.inviteCode}` : "";
   return (
-    <li className="-mx-2 flex flex-wrap items-center gap-3 rounded-sm p-2">
+    <li className="-mx-2 flex min-w-0 flex-wrap items-center gap-3 rounded-sm p-2">
       <Avatar name={member.name} size={32} />
       <div className="min-w-0 flex-1">
-        <p className="truncate t-small font-semibold text-fg-1">{member.name}</p>
+        <p className="flex min-w-0 items-center gap-1.5 t-small font-semibold text-fg-1">
+          <span className="truncate">{member.name}</span>
+          {member.sample && <SampleTag />}
+        </p>
         <p className="truncate t-micro text-fg-3">
           <span className="font-medium text-fg-2">{roleLabel(member.role)}</span>
           {member.title && member.title !== roleLabel(member.role) && ` · ${member.title}`}
@@ -217,8 +222,8 @@ function AddMember({ team, onAdded }: { team: TeamView; onAdded: () => void }) {
           </select>
           <span className="t-small text-fg-3">{ROLES.find((r) => r.key === role)?.description}</span>
         </label>
-        <Field label="Name" name="member-name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <Field label="Work email" name="member-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <Field label="Name" name="member-name" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} required />
+        <Field label="Work email" name="member-email" type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} required />
         <Field label="Job title" name="member-title" optional value={title} onChange={(e) => setTitle(e.target.value)} />
         {technical && (
           <Field
@@ -301,7 +306,7 @@ function Repositories({ team, onSaved }: { team: TeamView; onSaved: () => void }
         Rosetta watches these. Every commit by someone on your team is explained and sent to their manager, with no links to paste.
       </p>
 
-      <ul className="mt-4 grid gap-1">
+      <ul className="mt-4 grid grid-cols-1 gap-1">
         {repos.map((r) => (
           <li key={r} className="flex items-center justify-between gap-2 rounded-sm bg-surface-2 px-3 py-2">
             <span className="truncate font-mono t-small text-fg-1">{r}</span>
@@ -365,8 +370,106 @@ function Repositories({ team, onSaved }: { team: TeamView; onSaved: () => void }
             </li>
             <li>Events: pushes, commit comments, issue comments.</li>
           </ol>
-          <p className="mt-3 t-micro text-fg-3">The server must be reachable from GitHub (deployed, or through a tunnel).</p>
+          {/localhost|127\.0\.0\.1/.test(webhook) ? (
+            <p className="mt-3 rounded-sm border border-(--risk-medium) px-3 py-2 t-small text-fg-1">
+              This address is on your own computer, so GitHub can't reach it. Use the deployed server's address, or a tunnel such as
+              ngrok, as the payload URL. Until then, use Check GitHub now.
+            </p>
+          ) : (
+            <p className="mt-3 t-micro text-fg-3">The server must be reachable from GitHub (deployed, or through a tunnel).</p>
+          )}
         </details>
+      )}
+    </section>
+  );
+}
+
+const TASK_LABEL: Record<string, string> = {
+  explain: "Explaining changes",
+  judge: "Checking explanations",
+  ask: "Answering Ask why",
+  translate: "Rewriting messages",
+  note: "Personal notes",
+};
+
+/** The owner names the workspace; everyone sees it next to the logo. */
+function WorkspaceName() {
+  const { org, renameWorkspace } = useSession();
+  const [name, setName] = useState(org?.name ?? "");
+  const [saving, setSaving] = useState(false);
+  const changed = name.trim() && name.trim() !== org?.name;
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!changed) return;
+    setSaving(true);
+    try {
+      await renameWorkspace(name.trim());
+      toast("Workspace renamed.");
+    } catch (err) {
+      toast(err instanceof api.ApiError && err.detail ? err.detail : "That didn't save. Try again in a minute.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={onSubmit} className="grid gap-3 rounded-md bg-surface-1 p-6 shadow-elev-1">
+      <h2 className="t-heading text-fg-1">Workspace</h2>
+      <div className="flex gap-2">
+        <label htmlFor="workspace-name" className="sr-only">
+          Workspace name
+        </label>
+        <input id="workspace-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} className={inputClass} />
+        <Button type="submit" loading={saving} disabled={!changed} className="h-11!">
+          Rename
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/** Today's AI calls against the free daily limits, so leads aren't surprised. */
+function AiQuota() {
+  const [usage, setUsage] = useState<AiUsage | null>(null);
+  useEffect(() => {
+    api.getUsage().then(setUsage).catch(() => {});
+  }, []);
+  if (!usage) return null;
+  const rows = [
+    { name: "Explanations (Gemini)", u: usage.gemini },
+    { name: "Everything else (Groq)", u: usage.fallback },
+  ].filter((r) => r.u.configured);
+  if (!rows.length) return null;
+  const tasks = Object.entries(usage.tasks).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <section className="rounded-md bg-surface-1 p-6 shadow-elev-1">
+      <h2 className="t-heading text-fg-1">AI use today</h2>
+      <p className="mt-1 t-small text-fg-2">Free daily limits. They reset at midnight, India time.</p>
+      <ul className="mt-4 grid gap-4">
+        {rows.map(({ name, u }) => {
+          const pct = Math.min(100, Math.round((u.used / Math.max(1, u.limit)) * 100));
+          const low = u.exhausted || u.left <= Math.ceil(u.limit * 0.15);
+          return (
+            <li key={name}>
+              <div className="flex items-baseline justify-between gap-2 t-small">
+                <span className="text-fg-1">{name}</span>
+                <span className={cn("font-mono", low ? "text-(--risk-high)" : "text-fg-2")}>
+                  {u.exhausted ? "Used up" : `${u.left} of ${u.limit} left`}
+                </span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2" role="meter" aria-valuenow={u.used} aria-valuemax={u.limit} aria-label={name}>
+                <div className={cn("h-full rounded-full", low ? "bg-(--risk-high)" : "bg-fg-1")} style={{ width: `${pct}%` }} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {tasks.length > 0 && (
+        <p className="mt-4 t-micro text-fg-3">
+          {tasks.map(([t, n]) => `${TASK_LABEL[t] ?? t}: ${n}`).join(" · ")}
+        </p>
       )}
     </section>
   );

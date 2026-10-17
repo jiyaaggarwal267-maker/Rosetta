@@ -57,12 +57,15 @@ type DiagramProps = {
   /** Walkthrough: the path to light up; everything else dims. */
   trace?: string[] | null;
   onAsk?: (target: AskTarget) => void;
+  /** What selecting a box does, for screen readers. */
+  askLabel?: string;
 };
 
 /** One graph, drawn by Mermaid from our JSON at one reader's level. */
-export function FlowDiagram({ graph, labels, changed, panel, trace, onAsk }: DiagramProps) {
+export function FlowDiagram({ graph, labels, changed, panel, trace, onAsk, askLabel = "Ask why" }: DiagramProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"rendering" | "ready" | "failed">("rendering");
+  const [asList, setAsList] = useState(false);
   const wide = useMediaQuery("(min-width: 900px)", true);
   const direction = wide ? "LR" : "TD";
   const renderId = `flow${useId().replace(/[^a-zA-Z0-9]/g, "")}${panel}${direction}`;
@@ -78,7 +81,7 @@ export function FlowDiagram({ graph, labels, changed, panel, trace, onAsk }: Dia
         const { svg } = await mermaid.render(renderId, toMermaid(graph, JSON.parse(labelsKey), changed, direction));
         if (cancelled || !ref.current) return;
         ref.current.innerHTML = svg;
-        decorate(ref.current, graph, JSON.parse(labelsKey), Boolean(onAsk));
+        decorate(ref.current, graph, JSON.parse(labelsKey), onAsk ? askLabel : null);
         setStatus("ready");
       } catch {
         document.getElementById(`d${renderId}`)?.remove();
@@ -118,11 +121,16 @@ export function FlowDiagram({ graph, labels, changed, panel, trace, onAsk }: Dia
   };
 
   const label = (key: string) => labels[key] ?? key;
+  const listId = `${renderId}-steps`;
+  const showList = asList || status === "failed";
 
   return (
     <div className="min-w-0">
       <div
         ref={ref}
+        role="group"
+        aria-label={`Flowchart, ${panel === "after" ? "after" : "before"} this change`}
+        aria-describedby={listId}
         data-panel={panel}
         onClick={onClick}
         onKeyDown={onKeyDown}
@@ -133,12 +141,23 @@ export function FlowDiagram({ graph, labels, changed, panel, trace, onAsk }: Dia
           status === "failed" && "hidden",
         )}
       />
-      {/* Text version: always there for screen readers; shown if the chart can't render. */}
-      <ol className={cn(status === "failed" ? "grid gap-2" : "sr-only")} aria-label="Step by step">
+      {/* Text version, from the same data: always there for screen readers, shown on request or if the chart can't render. */}
+      {status !== "failed" && (
+        <button
+          type="button"
+          aria-expanded={asList}
+          aria-controls={listId}
+          onClick={() => setAsList((v) => !v)}
+          className="press mt-2 inline-flex min-h-11 items-center t-small text-fg-3 underline underline-offset-4 hover:text-fg-1 md:min-h-8"
+        >
+          {asList ? "Hide the list" : "Read the steps as a list"}
+        </button>
+      )}
+      <ol id={listId} className={cn(showList ? "mt-2 grid gap-2" : "sr-only")} aria-label="Step by step">
         {orderedNodes(graph).map((node) => {
           const next = nextNodes(graph, node.id);
           return (
-            <li key={node.id} className={cn(status === "failed" && "rounded-sm bg-surface-2 px-3 py-2 t-small text-fg-1 shadow-ring")}>
+            <li key={node.id} className={cn(showList && "rounded-sm bg-surface-2 px-3 py-2 t-small text-fg-1 shadow-ring")}>
               {label(node.key)}
               {next.length > 0 &&
                 `, then ${next.map((n) => (n.labelKey ? `${label(n.node.key)} (${label(n.labelKey)})` : label(n.node.key))).join(" or ")}`}
@@ -151,18 +170,18 @@ export function FlowDiagram({ graph, labels, changed, panel, trace, onAsk }: Dia
 }
 
 /** Tags nodes and edges with our ids, and makes nodes buttons when asking is on. */
-function decorate(root: HTMLElement, graph: FlowGraph, labels: Record<string, string>, askable: boolean) {
+function decorate(root: HTMLElement, graph: FlowGraph, labels: Record<string, string>, askLabel: string | null) {
   root.querySelectorAll<SVGGElement>("g.node").forEach((g) => {
     const id = g.dataset.id ?? g.id.match(/flowchart-(.+)-\d+$/)?.[1];
     const node = graph.nodes.find((n) => n.id === id);
     if (!node) return;
     g.dataset.node = node.id;
     g.dataset.key = node.key;
-    if (askable) {
+    if (askLabel) {
       g.dataset.ask = "";
       g.setAttribute("tabindex", "0");
       g.setAttribute("role", "button");
-      g.setAttribute("aria-label", `Ask why: ${labels[node.key] ?? node.key}`);
+      g.setAttribute("aria-label", `${askLabel}: ${labels[node.key] ?? node.key}`);
     }
   });
   // Edge paths and their labels carry data-id = L_<from>_<to>_<n>.
@@ -181,13 +200,15 @@ type HowProps = {
   explanation: Explanation;
   level: LevelText;
   onAsk?: (target: AskTarget) => void;
+  askLabel?: string;
+  askHint?: string;
 };
 
 /**
  * "How it works": the before/after flowchart plus a worked example that
  * lights up its path one step at a time.
  */
-export function HowItWorks({ explanation, level, onAsk }: HowProps) {
+export function HowItWorks({ explanation, level, onAsk, askLabel, askHint = "Select any box to ask why." }: HowProps) {
   const { before, after } = explanation.flow;
   const changed = useMemo(() => changedNodeIds(before, after), [before, after]);
   const [panel, setPanel] = useState<"before" | "after">("after");
@@ -206,7 +227,7 @@ export function HowItWorks({ explanation, level, onAsk }: HowProps) {
           </h2>
           <p className="mt-1 t-small text-fg-3">
             {panel === "after" ? "After this change." : "Before this change."}
-            {onAsk && " Select any box to ask why."}
+            {onAsk && ` ${askHint}`}
           </p>
         </div>
         {before ? (
@@ -244,6 +265,7 @@ export function HowItWorks({ explanation, level, onAsk }: HowProps) {
           panel={panel}
           trace={trace}
           onAsk={onAsk}
+          askLabel={askLabel}
         />
       </div>
 

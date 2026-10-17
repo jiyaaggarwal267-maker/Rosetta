@@ -18,7 +18,7 @@ export function Avatar({ name, size = 32, lead = false }: { name: string; size?:
       style={{ width: size, height: size, fontSize: Math.round(size * 0.38) }}
       className={cn(
         "grid shrink-0 place-items-center rounded-full font-semibold",
-        lead ? "bg-steel text-paper" : "bg-surface-2 text-fg-1 shadow-ring-strong",
+        lead ? "bg-deep text-paper" : "bg-surface-2 text-fg-1 shadow-ring-strong",
       )}
     >
       {initials(name)}
@@ -27,11 +27,21 @@ export function Avatar({ name, size = 32, lead = false }: { name: string; size?:
 }
 
 /** "Arjun Mehta · Engineer · Payments" */
-export function PersonLine({ person, fallback, className }: { person: Person | null; fallback?: string; className?: string }) {
+/** Marks the people and changes made by "Add a sample team", so nobody takes them for real ones. */
+export function SampleTag({ label = "Sample" }: { label?: string }) {
+  return (
+    <span className="inline-flex h-5 items-center rounded-xs bg-surface-2 px-1.5 t-micro font-medium text-fg-2 shadow-ring" title="Sample data, not a real person or change">
+      {label}
+    </span>
+  );
+}
+
+export function PersonLine({ person, fallback = "Former member", className }: { person: Person | null; fallback?: string; className?: string }) {
   if (!person) return <span className={className}>{fallback}</span>;
   return (
     <span className={cn("inline-flex min-w-0 flex-wrap items-center gap-x-1.5", className)}>
       <span className="font-medium text-fg-1">{person.name}</span>
+      {person.sample && <SampleTag />}
       <span aria-hidden>·</span>
       <span>{person.title || roleLabel(person.role)}</span>
       {person.team && (

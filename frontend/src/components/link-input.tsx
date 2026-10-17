@@ -27,6 +27,10 @@ export function LinkInput({ value, onValueChange, onPasteValue, onSubmit, loadin
   };
 
   return (
+    <div className="grid w-full min-w-0 grid-cols-1 gap-2">
+      <label htmlFor="commit-link" className="px-1 t-small font-medium text-fg-1">
+        GitHub commit or pull request link
+      </label>
     <form
       onSubmit={(e) => {
         e.preventDefault();
@@ -34,9 +38,6 @@ export function LinkInput({ value, onValueChange, onPasteValue, onSubmit, loadin
       }}
       className="glass flex h-14 w-full items-center gap-1 rounded-md p-1 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus"
     >
-      <label htmlFor="commit-link" className="sr-only">
-        GitHub commit or pull request link
-      </label>
       <input
         id="commit-link"
         ref={inputRef}
@@ -60,5 +61,6 @@ export function LinkInput({ value, onValueChange, onPasteValue, onSubmit, loadin
         Explain
       </Button>
     </form>
+    </div>
   );
 }

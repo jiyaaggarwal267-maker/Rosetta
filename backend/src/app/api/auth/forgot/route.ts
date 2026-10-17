@@ -5,6 +5,7 @@ import { userIdFor } from "@/lib/auth";
 import { ApiError, json, preflight, readJson, route } from "@/lib/http";
 import { mailConfigured, sendPasswordReset } from "@/lib/mail";
 import { RESET_TTL_MS, resetId, type Reset } from "@/lib/resets";
+import { clientIp, limit } from "@/lib/ratelimit";
 import { store } from "@/lib/store";
 import type { StoredUser } from "@/lib/types";
 
@@ -19,12 +20,15 @@ export const OPTIONS = preflight;
 export const POST = route(async (req) => {
   if (!mailConfigured()) throw new ApiError("unavailable", "Email isn't set up on this server yet.");
   const { email } = await readJson(req, z.object({ email: z.email().trim().toLowerCase() }));
+  limit(`forgot:${email}`, 3, 15 * 60_000);
+  limit(`forgot-ip:${clientIp(req)}`, 10, 15 * 60_000);
   const user = await store.get<StoredUser>("users", userIdFor(email));
 
   if (user && user.status === "active" && user.passwordHash) {
     const token = randomBytes(32).toString("hex");
     const now = Date.now();
-    await store.set("resets", resetId(token), { userId: user.id, expiresAt: now + RESET_TTL_MS, createdAt: now } satisfies Reset);
+    const id = resetId(token);
+    await store.set("resets", id, { id, userId: user.id, expiresAt: now + RESET_TTL_MS, createdAt: now } satisfies Reset);
     after(() => sendPasswordReset({ to: user.email, name: user.name, token }));
   }
   return json({ sent: true });

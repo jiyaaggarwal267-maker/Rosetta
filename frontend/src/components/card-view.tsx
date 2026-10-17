@@ -2,21 +2,27 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import * as api from "@/lib/api";
 import { applyEdits, hasEdits } from "@/lib/edits";
-import { isLead, roleLabel, roleNoun } from "@/lib/roles";
+import type { LevelKey } from "@/lib/levels";
+import { isLead, isTechnical, roleLabel, roleNoun, ROLES } from "@/lib/roles";
 import { useSession } from "@/lib/session";
 import type { CardEdits, CardView as CardData, CommentView, EditableField } from "@/lib/types";
+import { langFor } from "@/lib/lang";
 import { cn, firstName, timeAgo } from "@/lib/utils";
-import { AskWhy } from "./ask-why";
+import { AskWhy, ReportMistake } from "./ask-why";
 import { Button, buttonStyles } from "./button";
+import { CheckAccuracy } from "./check-accuracy";
+import { ConfidenceBadge } from "./confidence";
+import { DeleteChange, TrashIcon } from "./delete-change";
 import { Editable } from "./editable";
 import { FilesList } from "./files-list";
 import { HowItWorks, type AskTarget } from "./flowchart";
 import { GitHubIcon } from "./icons";
-import { PersonLine } from "./person";
+import { PersonLine, SampleTag } from "./person";
 import { RiskBadge } from "./risk-badge";
 import { StoryCard } from "./story-card";
 
@@ -39,7 +45,7 @@ export function CardView({ id }: { id: string }) {
   if (state.status === "ready") return <LoadedCard card={state.card} onCardChange={(card) => setState({ status: "ready", card })} />;
 
   return (
-    <main className="mx-auto max-w-(--w-app) px-(--gutter) py-16">
+    <main id="main" tabIndex={-1} className="mx-auto max-w-(--w-app) px-(--gutter) py-16">
       {state.status === "loading" ? (
         <p className="t-body text-fg-3" role="status">
           Opening the change…
@@ -63,6 +69,7 @@ export function CardView({ id }: { id: string }) {
 
 function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (card: CardData) => void }) {
   const { user } = useSession();
+  const router = useRouter();
   const [edits, setEdits] = useState<CardEdits>({});
   const [approving, setApproving] = useState(false);
   const [reexplaining, setReexplaining] = useState(false);
@@ -70,8 +77,10 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
   const [comments, setComments] = useState<CommentView[]>(card.comments);
   const [ask, setAsk] = useState<{ open: boolean; target: AskTarget | null }>({ open: false, target: null });
 
-  // The reading level is the viewer's role. It can't be switched: a manager reads the manager version.
-  const levelKey = card.viewer.level;
+  // The reading level is the viewer's role: a manager always reads the manager version.
+  // Only the author, while reviewing, can preview what everyone else will read.
+  const [preview, setPreview] = useState<LevelKey | null>(null);
+  const levelKey = card.viewer.canReview && preview ? preview : card.viewer.level;
   const reviewing = card.status === "draft" && card.viewer.canReview;
   const explanation = applyEdits(card.explanation, edits);
   const level = explanation.levels[levelKey];
@@ -124,7 +133,7 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
 
   return (
     <div>
-      <main className={cn("mx-auto max-w-(--w-app) px-(--gutter) pt-10", reviewing ? "pb-40" : "pb-24")}>
+      <main id="main" tabIndex={-1} className={cn("mx-auto max-w-(--w-app) px-(--gutter) pt-10", reviewing ? "pb-40" : "pb-24")}>
         <Link href="/app" className="t-small text-fg-3 hover:text-fg-1">
           Back to your work
         </Link>
@@ -143,13 +152,14 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
               <PersonLine person={card.authorPerson} fallback={authorName} className="text-fg-3" />
               <span aria-hidden>·</span>
               <time dateTime={card.committedAt}>{timeAgo(card.committedAt)}</time>
+              {card.source === "demo" && <SampleTag label="Sample change" />}
               <span aria-hidden>·</span>
               {card.status === "approved" ? (
                 <span className="inline-flex h-6 items-center rounded-xs bg-surface-2 px-2 t-micro text-fg-2">
                   Reviewed by {firstName(card.approvedBy ?? authorName)}
                 </span>
               ) : (
-                <span className="inline-flex h-6 items-center rounded-xs bg-[color-mix(in_srgb,var(--risk-medium)_12%,transparent)] px-2 t-micro text-(--risk-medium)">
+                <span className="inline-flex h-6 items-center rounded-xs bg-[color-mix(in_srgb,var(--risk-medium)_8%,transparent)] tone-pill px-2 t-micro text-(--risk-medium)">
                   {card.viewer.canReview ? "Waiting for your review" : `Not reviewed by ${firstName(authorName)} yet`}
                 </span>
               )}
@@ -158,17 +168,73 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
           <RiskBadge risk={explanation.risk} reason={explanation.riskReason} />
         </header>
 
+        <div className="mt-4 flex flex-wrap items-start gap-2">
+          {card.explanation.verification && (
+            <ConfidenceBadge
+              v={card.explanation.verification}
+              approved={card.status === "approved"}
+              showIssues={card.viewer.canReview || isTechnical(card.viewer.level)}
+            />
+          )}
+          <CheckAccuracy
+            cardId={card.id}
+            showIssues={card.viewer.canReview || isTechnical(card.viewer.level)}
+            onChecked={(verification) => onCardChange({ ...card, comments, explanation: { ...card.explanation, verification } })}
+          />
+        </div>
+
         <div className="mt-6 flex flex-wrap items-center justify-between gap-2">
           <p className="t-small text-fg-2">
-            Explained for you as {roleNoun(levelKey)}.
-            {reviewing && " This is how you'll read it; your manager gets their own version. Select any text to fix it."}
+            {levelKey === card.viewer.level ? `Explained for you as ${roleNoun(levelKey)}.` : `This is what ${roleNoun(levelKey)} reads.`}
+            {reviewing && " Select any text to fix it."}
           </p>
-          {(card.viewer.canReview || isLead(levelKey)) && card.source !== "demo" && (
-            <Button variant="ghost" className="-mr-4" loading={reexplaining} onClick={onReexplain}>
-              Explain again
-            </Button>
-          )}
+          <div className="-mr-4 flex items-center gap-1">
+            {(card.viewer.canReview || isLead(levelKey)) && card.source !== "demo" && (
+              <Button variant="ghost" loading={reexplaining} onClick={onReexplain}>
+                Explain again
+              </Button>
+            )}
+            {card.viewer.canReview && (
+              <DeleteChange
+                id={card.id}
+                title={explanation.title}
+                onDeleted={() => router.push("/app")}
+                trigger={
+                  <>
+                    <TrashIcon /> Delete
+                  </>
+                }
+                triggerClassName="inline-flex h-10 items-center gap-2 rounded-sm px-4 t-small font-medium text-(--ghost-fg) hover:bg-surface-2 hover:text-(--risk-high)"
+              />
+            )}
+          </div>
         </div>
+
+        {card.viewer.canReview && (
+          <div className="mt-4 grid gap-2">
+            <p id="preview-label" className="t-small text-fg-2">
+              Check every version before your team reads it:
+            </p>
+            <div role="tablist" aria-labelledby="preview-label" className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+              {ROLES.map((r) => (
+                <button
+                  key={r.key}
+                  role="tab"
+                  type="button"
+                  aria-selected={levelKey === r.key}
+                  onClick={() => setPreview(r.key === card.viewer.level ? null : r.key)}
+                  className={cn(
+                    "press h-8 shrink-0 rounded-xs px-3 t-small font-medium pointer-coarse:h-11",
+                    levelKey === r.key ? "bg-fg-1 text-canvas" : "bg-surface-2 text-fg-2 hover:text-fg-1",
+                  )}
+                >
+                  {r.label}
+                  {r.key === card.viewer.level && <span className="sr-only"> (you)</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mt-4 grid items-stretch gap-6 card:grid-cols-12">
           <div className="card:col-span-7">
@@ -187,8 +253,20 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
         </div>
 
         <div className="mt-6">
-          <HowItWorks explanation={explanation} level={level} onAsk={card.viewer.canAsk ? (target) => setAsk({ open: true, target }) : undefined} />
+          <HowItWorks
+            explanation={explanation}
+            level={level}
+            onAsk={(target) => setAsk({ open: true, target })}
+            askLabel={card.viewer.canAsk ? "Ask why" : "See the code behind"}
+            askHint={card.viewer.canAsk ? "Select any box to ask why or see the code behind it." : "Select any box to see the code behind it."}
+          />
         </div>
+
+        {card.viewer.canAsk && card.authorPerson && (
+          <div className="mt-4 grid justify-items-start">
+            <ReportMistake card={card} label="Something wrong in this explanation?" />
+          </div>
+        )}
 
         {card.truncated && (
           <p className="mt-6 t-small text-fg-2">This change is large, so Rosetta summarized the {card.truncated.shownFiles} most changed files.</p>
@@ -215,7 +293,7 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
             transition={{ duration: 0.32, ease: [0.32, 0.72, 0, 1] }}
             className="fixed inset-x-0 bottom-0 z-30 px-(--gutter) pb-[max(env(safe-area-inset-bottom),16px)]"
           >
-            <div className="glass mx-auto flex max-w-(--w-app) items-center justify-between gap-4 rounded-lg py-3 pr-3 pl-6">
+            <aside aria-label="Review your change" className="glass mx-auto flex max-w-(--w-app) items-center justify-between gap-4 rounded-lg py-3 pr-3 pl-6">
               <p className="t-small text-fg-1">
                 <span className="font-semibold">Your change</span>
                 <span className="text-fg-2">
@@ -226,18 +304,19 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
               <Button variant="primary" loading={approving} onClick={onApprove}>
                 Mark as reviewed
               </Button>
-            </div>
+            </aside>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <AskWhy card={{ ...card, explanation }} target={ask.target} open={ask.open} onClose={closeAsk} />
+      <AskWhy card={{ ...card, explanation }} levelKey={levelKey} target={ask.target} open={ask.open} onClose={closeAsk} />
     </div>
   );
 }
 
 /** Engineers' notes on the change, each at the reader's level. */
 function Comments({ card, comments, onAdd }: { card: CardData; comments: CommentView[]; onAdd: (c: CommentView) => void }) {
+  const { user } = useSession();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [original, setOriginal] = useState<Set<string>>(new Set());
@@ -281,7 +360,9 @@ function Comments({ card, comments, onAdd }: { card: CardData; comments: Comment
                     </a>
                   )}
                 </p>
-                <p className="t-body text-fg-1">{showOriginal ? c.original : c.text}</p>
+                <p className="t-body text-fg-1" lang={langFor(user?.language, c.translated && !showOriginal)}>
+                  {showOriginal ? c.original : c.text}
+                </p>
                 {c.translated && (
                   <button
                     type="button"
@@ -305,7 +386,7 @@ function Comments({ card, comments, onAdd }: { card: CardData; comments: Comment
       )}
       {technical && (
         <form onSubmit={onSubmit} className="mt-auto grid gap-2 pt-6">
-          <label htmlFor="new-comment" className="sr-only">
+          <label htmlFor="new-comment" className="t-small font-medium text-fg-1">
             Add a comment
           </label>
           <textarea

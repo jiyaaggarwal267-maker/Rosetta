@@ -21,6 +21,7 @@ export function Field({ label, hint, error, optional, id, className, ref, ...pro
       <label htmlFor={inputId} className="t-small font-medium text-fg-1">
         {label}
         {optional && <span className="font-normal text-fg-3"> (optional)</span>}
+        {props.required && <span className="font-normal text-fg-3"> (required)</span>}
       </label>
       <input ref={ref} id={inputId} aria-invalid={error ? true : undefined} aria-describedby={describedBy} className={inputClass} {...props} />
       {error ? (
@@ -41,7 +42,7 @@ export function Field({ label, hint, error, optional, id, className, ref, ...pro
 /** A plain solid page wrapper for forms. */
 export function FormShell({ title, lead, children }: { title: string; lead?: ReactNode; children: ReactNode }) {
   return (
-    <main className="mx-auto max-w-(--w-app) px-(--gutter) pt-12 pb-24 md:pt-16">
+    <main id="main" tabIndex={-1} className="mx-auto max-w-(--w-app) px-(--gutter) pt-12 pb-24 md:pt-16">
       <h1 className="t-title text-balance text-fg-1">{title}</h1>
       {lead && <p className="mt-3 max-w-[36rem] t-body text-fg-2">{lead}</p>}
       <div className="mt-10">{children}</div>

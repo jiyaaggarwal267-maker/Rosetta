@@ -40,7 +40,7 @@ export function StoryCard({ level, levelLabel, fileCount, editable, onEdit, note
             className="t-body text-fg-2"
           />
         </div>
-        <h3 className="mt-6 t-heading text-fg-1">What changes</h3>
+        <h2 className="mt-6 t-heading text-fg-1">What changes</h2>
         <div className="mt-2">
           <Editable
             value={level.impact}

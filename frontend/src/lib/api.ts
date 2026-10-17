@@ -1,4 +1,7 @@
 import type {
+  AiUsage,
+  Digest,
+  NotificationItem,
   ApiCode,
   AskResult,
   CardEdits,
@@ -14,6 +17,7 @@ import type {
   TeamView,
   TicketDetail,
   TicketSummary,
+  Verification,
   User,
 } from "./types";
 
@@ -82,6 +86,8 @@ export type WorkspaceSignup = {
   githubLogin?: string;
   focus: Focus[];
   language: "en" | "hinglish";
+  acceptTerms: boolean;
+  marketingOptIn: boolean;
 };
 
 export const signup = (input: WorkspaceSignup) => call<Session>("/api/auth/signup", { method: "POST", body: input });
@@ -94,10 +100,19 @@ export const getInvite = (code: string) =>
   call<{ name: string; email: string; role: Role; title?: string; githubLogin?: string; orgName: string; invitedBy: string | null }>(
     `/api/invites/${encodeURIComponent(code)}`,
   );
-export const join = (input: { code: string; password: string; name?: string; githubLogin?: string; focus?: Focus[]; language?: "en" | "hinglish" }) =>
+export const join = (input: {
+  code: string;
+  password: string;
+  name?: string;
+  githubLogin?: string;
+  focus?: Focus[];
+  language?: "en" | "hinglish";
+  acceptTerms: boolean;
+  marketingOptIn: boolean;
+}) =>
   call<Session>("/api/auth/join", { method: "POST", body: input });
 export const getMe = () => call<{ user: User; org: OrgSummary | null }>("/api/me");
-export const updateMe = async (patch: Partial<Pick<User, "name" | "title" | "githubLogin" | "teamName" | "focus" | "language">>) =>
+export const updateMe = async (patch: Partial<Pick<User, "name" | "title" | "githubLogin" | "teamName" | "focus" | "language" | "marketingOptIn">>) =>
   (await call<{ user: User }>("/api/me", { method: "PATCH", body: patch })).user;
 
 /* ---------- team ---------- */
@@ -111,14 +126,52 @@ export const updateMember = (
 ) => call<{ member: Member }>(`/api/team/members/${id}`, { method: "PATCH", body: patch });
 export const removeMember = (id: string) => call<{ removed: string }>(`/api/team/members/${id}`, { method: "DELETE" });
 export const updateOrg = (patch: { name?: string; repos?: string[] }) => call<{ org: OrgSummary & { repos: string[] } }>("/api/org", { method: "PATCH", body: patch });
+export const getNotifications = () => call<{ items: NotificationItem[]; unread: number }>("/api/notifications");
+export const readNotifications = (input: { ids?: string[]; all?: boolean }) => call<{ marked: number }>("/api/notifications", { method: "POST", body: input });
+export const getDigest = (week = 0) => call<Digest>(`/api/digest?week=${week}`);
+export const changePassword = (current: string, next: string) =>
+  call<{ changed: true }>("/api/me/password", { method: "POST", body: { current, next } });
+export type ReportOptions = {
+  engineers: { id: string; name: string; title: string; changes: number }[];
+  owner: { name: string; isMe: boolean } | null;
+  email: boolean;
+  demo: boolean;
+};
+export const getReportOptions = () => call<ReportOptions>("/api/digest/report");
+export const weeklyReport = (input: { engineerId: string; sample: boolean; send: boolean }) =>
+  call<{ subject: string; html: string; sent: boolean; to: string }>("/api/digest/report", { method: "POST", body: input });
+/** Downloads everything Rosetta holds about you as a JSON file. */
+export async function exportMyData() {
+  const res = await fetch(`${BASE}/api/me/export`, { headers: authHeaders(), signal: AbortSignal.timeout(30_000) }).catch(() => {
+    throw new ApiError("network");
+  });
+  if (!res.ok) throw await toError(res);
+  return res.blob();
+}
+export const deleteAccount = (confirm: string, deleteWorkspace = false) =>
+  call<{ deleted: string; workspaceDeleted: boolean }>("/api/me", { method: "DELETE", body: { confirm, deleteWorkspace } });
+export const transferOwnership = (userId: string) => call<{ ownerId: string }>("/api/org/owner", { method: "POST", body: { userId } });
+export const getUsage = () => call<AiUsage>("/api/usage");
 export const syncNow = () => call<{ commits: number; comments: number }>("/api/sync", { method: "POST" });
 export const seedDemo = () =>
   call<{ added: number; password: string; logins: { name: string; role: Role; email: string }[] }>("/api/demo/seed", { method: "POST" });
 
 /* ---------- work ---------- */
 
-export const getFeed = (filters: { author?: string; team?: string; status?: string } = {}) => call<Feed>(`/api/feed${q(filters)}`);
+export type FeedFilters = {
+  author?: string;
+  team?: string;
+  status?: string;
+  q?: string;
+  risk?: string;
+  repo?: string;
+  days?: string;
+  offset?: string;
+  limit?: string;
+};
+export const getFeed = (filters: FeedFilters = {}) => call<Feed>(`/api/feed${q(filters)}`);
 export const getCard = (id: string) => call<CardView>(`/api/cards/${encodeURIComponent(id)}`);
+export const deleteCard = (id: string) => call<{ deleted: string }>(`/api/cards/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const reexplain = (id: string) =>
   call<{ card: CardView }>(`/api/cards/${encodeURIComponent(id)}/reexplain`, { method: "POST", timeoutMs: 240_000 });
 export const getForMe = (id: string) => call<{ note: string | null }>(`/api/cards/${encodeURIComponent(id)}/for-me`);
@@ -133,6 +186,8 @@ export const ask = (input: { cardId: string; nodeKey: string; question: string }
 
 /* ---------- questions ---------- */
 
+export const reportMistake = (cardId: string, input: { text: string; nodeKey?: string }) =>
+  call<{ ticket: TicketSummary }>(`/api/cards/${encodeURIComponent(cardId)}/report`, { method: "POST", body: input });
 export const getTickets = () => call<{ received: TicketSummary[]; sent: TicketSummary[]; unread: number }>("/api/tickets");
 export const createTicket = (input: {
   toId: string;
@@ -179,6 +234,40 @@ export async function explain(url: string, onEvent: (event: ExplainEvent) => voi
       if (line.type === "card") return line.card;
       if (line.type === "error") throw new ApiError(line.code);
       onEvent(line);
+    }
+    if (done) throw new ApiError("unavailable");
+  }
+}
+
+export type CheckStep = { type: "step"; key: "read" | "evidence" | "words" | "names" | "judge"; state: "running" | "pass" | "warn" | "fail"; detail?: string };
+
+/** Re-checks a card against its real diff, one visible step at a time. */
+export async function checkAccuracy(cardId: string, onStep: (step: CheckStep) => void): Promise<Verification> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/api/cards/${encodeURIComponent(cardId)}/check`, {
+      method: "POST",
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch {
+    throw new ApiError("network");
+  }
+  if (!res.ok || !res.body) throw await toError(res);
+  type Line = CheckStep | { type: "card"; card: { verification: Verification } } | { type: "error"; code: ApiCode };
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += value ?? "";
+    const lines = buffer.split("\n");
+    buffer = done ? "" : (lines.pop() ?? "");
+    for (const raw of lines) {
+      if (!raw.trim()) continue;
+      const line = JSON.parse(raw) as Line;
+      if (line.type === "card") return line.card.verification;
+      if (line.type === "error") throw new ApiError(line.code);
+      onStep(line);
     }
     if (done) throw new ApiError("unavailable");
   }

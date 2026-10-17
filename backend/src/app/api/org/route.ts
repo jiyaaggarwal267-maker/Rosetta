@@ -30,6 +30,7 @@ export const PATCH = route(async (req) => {
   if (!isLead(me.role)) throw new ApiError("forbidden", "Only a CMO or manager can change workspace settings.");
   const org = await requireOrg(me);
   const patch = patchSchema.parse(await req.json().catch(() => ({})));
+  if (patch.name && org.ownerId !== me.id) throw new ApiError("forbidden", "Only the person who created the workspace can rename it.");
   const next: Org = {
     ...org,
     ...(patch.name ? { name: patch.name } : {}),

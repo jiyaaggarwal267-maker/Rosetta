@@ -63,6 +63,11 @@ async function send(to: string, subject: string, html: string, text: string) {
 /* The emails                                                          */
 /* ------------------------------------------------------------------ */
 
+/** The weekly report: its own full-width layout, built in report.ts. */
+export function sendWeeklyReport(o: { to: string; subject: string; html: string; text: string }) {
+  return send(o.to, o.subject, o.html, o.text);
+}
+
 export function sendInvite(o: { to: string; name: string; inviter: string; orgName: string; role: string; code: string }) {
   const url = `${env.appUrl}/join?code=${o.code}`;
   return send(
@@ -78,6 +83,21 @@ export function sendInvite(o: { to: string; name: string; inviter: string; orgNa
       button: { label: "Join your team", url },
     }),
     `Hi ${o.name}, ${o.inviter} added you to ${o.orgName} on Rosetta as ${o.role}. Join: ${url} (code ${o.code})`,
+  );
+}
+
+export function sendReport(o: { to: string; toName: string; fromName: string; title: string; text: string; ticketId: string }) {
+  const url = `${env.appUrl}/app/questions/${o.ticketId}`;
+  return send(
+    o.to,
+    `${o.fromName} thinks an explanation is wrong: ${o.title}`,
+    layout({
+      heading: `${o.fromName} reported a possible mistake`,
+      paragraphs: [`In the explanation of “${o.title}”:`, `“${o.text}”`, "Check it against your code. You can fix the text, or ask Rosetta to explain it again."],
+      button: { label: "See the report", url },
+    }),
+    `${o.fromName} reported: ${o.text}
+See it: ${url}`,
   );
 }
 

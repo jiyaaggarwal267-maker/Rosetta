@@ -222,8 +222,27 @@ export function parseExplanation(raw: unknown, { strict = true }: { strict?: boo
   return parsed;
 }
 
+/**
+ * Smaller models sometimes skip a level or two. A missing one borrows from
+ * the nearest level on the same side (code readers or not), so a CMO never
+ * gets engineer text. If a whole side is missing, parsing still fails.
+ */
+function fillMissingLevels(raw: unknown): unknown {
+  const levels = (raw as { levels?: Record<string, unknown> } | null)?.levels;
+  if (!levels || typeof levels !== "object") return raw;
+  const ok = (key: LevelKey) => rawLevel.safeParse(levels[key]).success;
+  const filled = { ...levels };
+  LEVELS.forEach(({ key }, i) => {
+    if (ok(key)) return;
+    const technical = i < 3;
+    const donor = nearest(i).find((j) => j < 3 === technical && ok(LEVELS[j].key));
+    if (donor !== undefined) filled[key] = levels[LEVELS[donor].key];
+  });
+  return { ...(raw as object), levels: filled };
+}
+
 function parseExplanationInner(raw: unknown): Omit<Explanation, "files"> {
-  const data = rawExplanation.parse(raw);
+  const data = rawExplanation.parse(fillMissingLevels(raw));
   const beforeResult = data.flow.before?.nodes.length ? cleanGraph(data.flow.before, "b", 10) : null;
   const afterResult = cleanGraph(data.flow.after, "a", 14);
   if (!afterResult.graph.nodes.length) throw new Error("Flow has no after nodes");
@@ -380,3 +399,34 @@ export const parseLevelsText = (raw: unknown) =>
     LevelKey,
     string
   >;
+
+/* ------------------------------------------------------------------ */
+/* Repair: a model that skipped whole levels                          */
+/* ------------------------------------------------------------------ */
+
+/** Levels that are missing even after borrowing from neighbours: a whole side was skipped. */
+export function missingLevels(raw: unknown): LevelKey[] {
+  const levels = (fillMissingLevels(raw) as { levels?: Record<string, unknown> } | null)?.levels;
+  if (!levels || typeof levels !== "object") return [];
+  return LEVELS.map((l) => l.key).filter((key) => !rawLevel.safeParse(levels[key]).success);
+}
+
+/** Schema for just the missing levels. */
+export const someLevelsSchema = (keys: LevelKey[]) => ({
+  type: "OBJECT",
+  properties: { levels: { type: "OBJECT", properties: Object.fromEntries(keys.map((k) => [k, levelSchema])), required: keys } },
+  required: ["levels"],
+});
+
+/** Every key that needs a label, and how many walkthrough steps there are, from a raw answer. */
+export function labelKeysOf(raw: unknown) {
+  const r = raw as { flow?: { before?: z.infer<typeof rawGraph> | null; after?: z.infer<typeof rawGraph> }; walkthrough?: { steps?: unknown[] } };
+  const keys = new Set<string>();
+  for (const g of [r.flow?.before, r.flow?.after]) {
+    if (!g) continue;
+    for (const n of g.nodes ?? []) keys.add(n.key);
+    for (const grp of g.groups ?? []) keys.add(grp.key);
+    for (const e of g.edges ?? []) if (e.label_key) keys.add(e.label_key);
+  }
+  return { keys: [...keys], steps: r.walkthrough?.steps?.length ?? 0 };
+}

@@ -36,7 +36,22 @@ export type Explanation = {
   flow: { before: FlowGraph | null; after: FlowGraph };
   walkthrough?: Walkthrough;
   levels: Record<LevelKey, LevelText>;
+  verification?: Verification;
+  evidence?: Record<string, Evidence>;
 };
+
+export type Verification = {
+  score: number;
+  confidence: "high" | "medium" | "low";
+  checkedBy: "ai" | "code" | "sample";
+  issues: string[];
+  retried: boolean;
+  needsReview: boolean;
+  checkedAt: string;
+};
+
+/** A few diff lines behind one flowchart step. */
+export type Evidence = { file: string; url?: string; line?: number; lines: { kind: "+" | "-" | " "; text: string }[] };
 
 export type FileChange = { path: string; additions: number; deletions: number; url: string };
 
@@ -65,7 +80,12 @@ export type CardEdits = {
   levels?: Partial<Record<LevelKey, Partial<Record<EditableField, string>>>>;
 };
 
-export type ExplainEvent = { type: "start"; title: string } | { type: "finding"; text: string } | { type: "writing" };
+export type ExplainEvent =
+  | { type: "start"; title: string }
+  | { type: "finding"; text: string }
+  | { type: "writing" }
+  | { type: "checking" }
+  | { type: "rewriting" };
 
 export type ApiErrorCode =
   | "invalid_url"
@@ -100,6 +120,10 @@ export type User = {
   focus: Focus[];
   language: "en" | "hinglish";
   status: "active" | "invited";
+  termsAcceptedAt?: string;
+  termsVersion?: string;
+  privacyVersion?: string;
+  marketingOptIn?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -175,7 +199,17 @@ export type ApiCode =
   | "invalid_credentials"
   | "conflict"
   | "forbidden"
-  | "bad_request";
+  | "bad_request"
+  | "rate_limited"
+  | "terms_required";
+
+export type AiUsage = {
+  date: string;
+  gemini: ProviderUsage;
+  fallback: ProviderUsage;
+  tasks: Record<string, number>;
+};
+export type ProviderUsage = { configured: boolean; used: number; limit: number; left: number; exhausted: boolean };
 
 export type OrgSummary = { id: string; name: string; ownerId: string };
 
@@ -188,6 +222,8 @@ export type Person = {
   status: "active" | "invited";
   managerId?: string;
   team: { id: string; name: string } | null;
+  /** Made by "Add a sample team": not a real person. */
+  sample?: boolean;
 };
 
 export type Member = Person & {
@@ -221,17 +257,55 @@ export type FeedItem = {
   author: Person | null;
   authorName: string;
   files: number;
+  sample?: boolean;
+  confidence: { score: number; level: Verification["confidence"]; checkedBy: Verification["checkedBy"]; needsReview: boolean } | null;
+  reports: number;
   comments: number;
   openQuestions: number;
 };
 
 export type Feed = {
   items: FeedItem[];
+  page: { offset: number; limit: number; total: number; more: boolean };
+  repos: string[];
   people: Person[];
   teams: { id: string; name: string; lead: string }[];
   myTeam: { id: string; name: string } | null;
   stats: { total: number; thisWeek: number; notReviewed: number; highRisk: number; openQuestions: number };
   sync: { repos: number; lastSyncAt: string | null };
+};
+
+export type NotificationItem = {
+  id: string;
+  kind: "question" | "reply" | "report" | "change" | "reviewed" | "joined";
+  title: string;
+  href: string;
+  read: boolean;
+  createdAt: string;
+};
+
+export type DigestCard = {
+  id: string;
+  title: string;
+  summary: string;
+  impact: string;
+  risk: Risk;
+  status: "draft" | "approved";
+  committedAt: string;
+  author: Person | null;
+  authorName: string;
+  confidence: { score: number; level: Verification["confidence"] } | null;
+};
+
+export type Digest = {
+  org: { name: string };
+  range: { from: string; to: string; week: number };
+  headline: string;
+  stats: { changes: number; reviewed: number; risky: number; questions: number; comments: number };
+  highlights: DigestCard[];
+  attention: (DigestCard & { reason: string })[];
+  people: { person: Person; changes: number; reviewed: number }[];
+  waiting: { id: string; subject: string; to: Person; since: string }[];
 };
 
 export type Shown = { text: string; original: string; translated: boolean };
@@ -253,11 +327,15 @@ export type CardView = Card & {
   authorPerson: Person | null;
   viewer: { level: Role; canReview: boolean; canAsk: boolean; canComment: boolean };
   comments: CommentView[];
+  reports?: number;
+  /** A ready question to offer in Ask Why (the pitch commit has one). */
+  suggestedQuestion?: string;
 };
 
 export type TicketSummary = {
   id: string;
   subject: string;
+  kind: "question" | "report";
   status: Ticket["status"];
   direction: "sent" | "received";
   from: Person | null;

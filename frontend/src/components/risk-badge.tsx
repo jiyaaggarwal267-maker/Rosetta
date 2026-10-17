@@ -35,7 +35,7 @@ export function RiskBadge({ risk, reason }: { risk: Risk; reason?: string }) {
 
   const className = cn(
     "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-xs px-2 t-micro tabular-nums",
-    "bg-[color-mix(in_srgb,var(--risk)_12%,transparent)] text-(--risk)",
+    "bg-[color-mix(in_srgb,var(--risk)_8%,transparent)] tone-pill text-(--risk)",
   );
   const style = { "--risk": `var(--risk-${risk})` } as CSSProperties;
 

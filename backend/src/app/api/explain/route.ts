@@ -4,12 +4,16 @@ import { cardIdFor, demoSampleFor, publicCard } from "@/lib/cards";
 import { fetchChange, type Change } from "@/lib/github";
 import { parseGitHubLink } from "@/lib/github-url";
 import { ApiError, ndjson, pause, preflight, readJson, route } from "@/lib/http";
-import { explanationFor, prepare, toCard } from "@/lib/ingest";
+import { isPitchLink } from "@/lib/demo/pitch";
+import { explainPitch } from "@/lib/demo/pitch-card";
+import { explanationFor, prepare, toCard, type Stage } from "@/lib/ingest";
 import { orgMembers, requireOrg } from "@/lib/org";
 import { store } from "@/lib/store";
 import type { StoredCard } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+// Explaining, checking and one rewrite can take a couple of minutes (the Vercel Hobby maximum is 300 s).
+export const maxDuration = 300;
 export const OPTIONS = preflight;
 
 const FINDING_GAP_MS = 300;
@@ -24,6 +28,11 @@ export const POST = route(async (req) => {
   const users = await orgMembers(org.id);
   const id = cardIdFor(org.id, link);
   const repo = `${link.owner}/${link.repo}`;
+  // Pasting a deleted change brings it back.
+  await store.remove("deleted", id);
+
+  // The pitch commit: always explained afresh, the same way, with no GitHub or AI calls.
+  if (isPitchLink(link)) return ndjson((emit) => explainPitch(id, org, me, users, emit));
 
   // Already explained in this workspace: replay the story, no GitHub or model calls.
   const existing = await store.get<StoredCard>("cards", id);
@@ -73,13 +82,21 @@ export const POST = route(async (req) => {
 
   return ndjson(async (emit) => {
     emit({ type: "start", title: prepared.reading });
-    const explanationPromise = explanationFor(prepared);
+    // Checking and rewriting can start while findings are still showing: hold them until "writing".
+    let writing = false;
+    let pending: Stage | null = null;
+    const explanationPromise = explanationFor(prepared, (stage) => {
+      if (writing) emit({ type: stage });
+      else pending = stage;
+    });
     explanationPromise.catch(() => {});
     for (const text of prepared.findings) {
       await pause(FINDING_GAP_MS);
       emit({ type: "finding", text });
     }
     emit({ type: "writing" });
+    writing = true;
+    if (pending) emit({ type: pending });
     const card = toCard(id, org, prepared, await explanationPromise, users, { createdBy: me.id, source: "manual" });
     await store.set("cards", id, card);
     return publicCard(card, me, users);

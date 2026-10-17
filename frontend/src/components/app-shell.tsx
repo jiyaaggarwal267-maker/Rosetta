@@ -9,6 +9,8 @@ import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { AccountNav } from "./account-nav";
 import { Logo } from "./logo";
+import { NotificationBell } from "./notification-bell";
+import { SiteFooter } from "./site-footer";
 import { ThemeToggle } from "./theme-toggle";
 
 /**
@@ -60,6 +62,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {org && <span className="hidden truncate t-small text-fg-3 md:inline">{org.name}</span>}
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <NotificationBell />
             <AccountNav />
             <ThemeToggle />
           </div>
@@ -77,7 +80,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             >
               {tab.label}
               {tab.href === "/app/questions" && unread > 0 && (
-                <span className="grid h-5 min-w-5 place-items-center rounded-full bg-steel px-1.5 t-micro text-paper tabular-nums">
+                <span className="grid h-5 min-w-5 place-items-center rounded-full bg-deep px-1.5 t-micro text-paper tabular-nums">
                   {unread}
                   <span className="sr-only"> unread</span>
                 </span>
@@ -87,6 +90,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
       </header>
       {children}
+      <SiteFooter />
     </>
   );
 }
@@ -94,7 +98,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 /** Page frame inside the app. */
 export function Page({ title, lead, actions, children }: { title: string; lead?: ReactNode; actions?: ReactNode; children: ReactNode }) {
   return (
-    <main className="mx-auto max-w-(--w-app) px-(--gutter) pt-10 pb-24">
+    <main id="main" tabIndex={-1} className="mx-auto max-w-(--w-app) px-(--gutter) pt-10 pb-24">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <h1 className="t-title text-balance text-fg-1">{title}</h1>

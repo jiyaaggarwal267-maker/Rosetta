@@ -145,7 +145,7 @@ export function ManageMember({ team, member, onClose, onChanged }: Props) {
             </label>
 
             {stepsDown && (
-              <p className="rounded-sm bg-[color-mix(in_srgb,var(--risk-medium)_12%,transparent)] px-3 py-2 t-small text-fg-1">
+              <p className="rounded-sm bg-[color-mix(in_srgb,var(--risk-medium)_8%,transparent)] tone-pill px-3 py-2 t-small text-fg-1">
                 {firstName(member.name)} leads {reports.length} {reports.length === 1 ? "person" : "people"}. They&rsquo;ll report to{" "}
                 {heir} instead.
               </p>

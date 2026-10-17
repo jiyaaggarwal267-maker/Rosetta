@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { Drawer } from "vaul";
-import { ApiError, ask, createTicket } from "@/lib/api";
-import type { CardView, Person } from "@/lib/types";
+import { toast } from "sonner";
+import { ApiError, ask, createTicket, reportMistake } from "@/lib/api";
+import type { LevelKey } from "@/lib/levels";
+import { isTechnical } from "@/lib/roles";
+import type { CardView, Evidence, Person } from "@/lib/types";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { firstName } from "@/lib/utils";
 import { Button } from "./button";
 import type { AskTarget } from "./flowchart";
+import { AiNotice } from "./ai-notice";
+import { EvidenceSnippet } from "./evidence";
 import { CloseIcon } from "./icons";
 import { Spinner } from "./spinner";
 
@@ -21,10 +26,18 @@ type Thread =
 
 const keyOf = (t: AskTarget) => `${t.panel}:${t.nodeId}`;
 
-type Props = { card: CardView; target: AskTarget | null; open: boolean; onClose: () => void };
+type Props = {
+  card: CardView;
+  target: AskTarget | null;
+  open: boolean;
+  onClose: () => void;
+  /** The level being read; a reviewer can preview the others. */
+  levelKey?: LevelKey;
+};
 
 /** Ask why a step works the way it does. Code answers first; the engineer answers the rest. */
-export function AskWhy({ card, target, open, onClose }: Props) {
+export function AskWhy({ card, target, open, onClose, levelKey = card.viewer.level }: Props) {
+  const title = card.viewer.canAsk ? "Ask why" : "Behind this step";
   const desktop = useMediaQuery("(min-width: 768px)", true);
   const [threads, setThreads] = useState<Record<string, Thread>>({});
   const titleId = useId();
@@ -34,6 +47,7 @@ export function AskWhy({ card, target, open, onClose }: Props) {
     <AskContent
       key={keyOf(target)}
       card={card}
+      levelKey={levelKey}
       target={target}
       thread={threads[keyOf(target)]}
       setThread={(t) =>
@@ -58,7 +72,7 @@ export function AskWhy({ card, target, open, onClose }: Props) {
             className="glass glass-thick fixed inset-x-0 bottom-0 z-50 flex max-h-[85svh] flex-col rounded-t-lg pb-[env(safe-area-inset-bottom)] outline-none"
           >
             <div aria-hidden className="mx-auto mt-3 h-1.5 w-10 shrink-0 rounded-full bg-(--ring-strong)" />
-            <Drawer.Title className="px-6 pt-4 t-heading text-fg-1">Ask why</Drawer.Title>
+            <Drawer.Title className="px-6 pt-4 t-heading text-fg-1">{title}</Drawer.Title>
             <div className="overflow-y-auto px-6 pt-4 pb-6">{content}</div>
           </Drawer.Content>
         </Drawer.Portal>
@@ -67,7 +81,7 @@ export function AskWhy({ card, target, open, onClose }: Props) {
   }
 
   return (
-    <Sheet open={open} onClose={onClose} titleId={titleId} inputRef={inputRef}>
+    <Sheet open={open} onClose={onClose} titleId={titleId} inputRef={inputRef} title={title}>
       {content}
     </Sheet>
   );
@@ -78,8 +92,10 @@ function Sheet({
   onClose,
   titleId,
   inputRef,
+  title,
   children,
 }: {
+  title: string;
   open: boolean;
   onClose: () => void;
   titleId: string;
@@ -117,7 +133,7 @@ function Sheet({
     >
       <div className="flex items-center justify-between gap-4 py-4 pr-4 pl-6">
         <h2 id={titleId} className="t-heading text-fg-1">
-          Ask why
+          {title}
         </h2>
         <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
           <CloseIcon />
@@ -132,19 +148,23 @@ const SUGGESTIONS = ["Why was this needed?", "Will this delay the launch?"];
 
 function AskContent({
   card,
+  levelKey,
   target,
   thread,
   setThread,
   inputRef,
 }: {
   card: CardView;
+  levelKey: LevelKey;
   target: AskTarget;
   thread: Thread | undefined;
   setThread: (thread: Thread | undefined) => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const [question, setQuestion] = useState("");
-  const level = card.explanation.levels[card.viewer.level];
+  const level = card.explanation.levels[levelKey];
+  const evidence = card.explanation.evidence?.[target.key];
+  const technical = isTechnical(card.viewer.level) || card.viewer.canReview;
   const stepLabel = level.labels[target.key] ?? target.key;
 
   const submit = async (text: string) => {
@@ -195,12 +215,16 @@ function AskContent({
   return (
     <div className="grid gap-6">
       <div>
-        <p className="t-small text-fg-2">Asking about</p>
+        <p className="t-small text-fg-2">{card.viewer.canAsk ? "Asking about" : "Step"}</p>
         <p className="mt-1 t-heading text-fg-1">{stepLabel}</p>
       </div>
 
+      <Proof evidence={evidence} technical={technical} isSample={card.source === "demo"} />
+
+      {card.viewer.canAsk && (
+        <>
       <form onSubmit={onSubmit} className="grid gap-3">
-        <label htmlFor={`ask-${target.nodeId}`} className="sr-only">
+        <label htmlFor={`ask-${target.nodeId}`} className="t-small font-medium text-fg-1">
           Your question
         </label>
         <textarea
@@ -220,7 +244,7 @@ function AskContent({
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap gap-2">
-            {SUGGESTIONS.map((s) => (
+            {[...(card.suggestedQuestion ? [card.suggestedQuestion] : []), ...SUGGESTIONS].map((s) => (
               <button
                 key={s}
                 type="button"
@@ -228,7 +252,7 @@ function AskContent({
                   setQuestion(s);
                   void submit(s);
                 }}
-                className="press h-8 rounded-xs bg-surface-2 px-3 t-small font-medium text-fg-1 hover:bg-(--surface-3) pointer-coarse:h-11"
+                className="press min-h-8 rounded-xs bg-surface-2 px-3 py-1 text-left t-small font-medium text-fg-1 hover:bg-(--surface-3) pointer-coarse:min-h-11"
               >
                 {s}
               </button>
@@ -238,6 +262,7 @@ function AskContent({
             Ask
           </Button>
         </div>
+        <AiNotice />
       </form>
 
       <div aria-live="polite" className="grid gap-4">
@@ -301,6 +326,101 @@ function AskContent({
           </div>
         )}
       </div>
+
+      <ReportMistake card={card} nodeKey={target.key} />
+        </>
+      )}
     </div>
+  );
+}
+
+/** The code behind the step. People who don't read code open it if they want proof. */
+function Proof({ evidence, technical, isSample }: { evidence?: Evidence; technical: boolean; isSample: boolean }) {
+  if (!evidence) {
+    return technical ? (
+      <p className="t-small text-fg-3">No single place in the diff matches this step{isSample ? "" : ", so check it against the change yourself"}.</p>
+    ) : null;
+  }
+  if (technical) {
+    return (
+      <div className="grid gap-2">
+        <p className="t-small text-fg-2">The code behind this step</p>
+        <EvidenceSnippet evidence={evidence} />
+      </div>
+    );
+  }
+  return (
+    <details className="rounded-sm bg-surface-2 p-3">
+      <summary className="cursor-pointer t-small font-medium text-fg-1">See the code behind this step</summary>
+      <p className="mt-2 t-micro text-fg-3">You don&rsquo;t need to read it. It&rsquo;s here so anyone can check this box against the real change.</p>
+      <div className="mt-3">
+        <EvidenceSnippet evidence={evidence} />
+      </div>
+    </details>
+  );
+}
+
+/** "This step looks wrong": goes straight to the engineer who wrote the change. */
+export function ReportMistake({ card, nodeKey, label = "This step looks wrong" }: { card: CardView; nodeKey?: string; label?: string }) {
+  const [state, setState] = useState<"idle" | "writing" | "sending" | "sent">("idle");
+  const [text, setText] = useState("");
+  const [ticketId, setTicketId] = useState<string | null>(null);
+  const author = card.authorPerson;
+  if (!author) return null;
+
+  if (state === "sent") {
+    return (
+      <p className="t-small text-fg-2">
+        Thanks. {firstName(author.name)} will check it.{" "}
+        {ticketId && (
+          <Link href={`/app/questions/${ticketId}`} className="font-medium text-fg-1 underline underline-offset-4">
+            Follow it in Questions
+          </Link>
+        )}
+      </p>
+    );
+  }
+  if (state === "idle") {
+    return (
+      <button type="button" onClick={() => setState("writing")} className="justify-self-start t-small text-fg-3 underline underline-offset-4 hover:text-fg-1">
+        {label}
+      </button>
+    );
+  }
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    if (text.trim().length < 3) return;
+    setState("sending");
+    try {
+      const { ticket } = await reportMistake(card.id, { text: text.trim(), nodeKey });
+      setTicketId(ticket.id);
+      setState("sent");
+    } catch (error) {
+      setState("writing");
+      toast(error instanceof ApiError && error.detail ? error.detail : "That didn't send. Try again in a minute.");
+    }
+  };
+  return (
+    <form onSubmit={send} className="grid gap-2 border-t border-(--ring) pt-4">
+      <label htmlFor={`report-${nodeKey ?? "card"}`} className="t-small font-medium text-fg-1">
+        What looks wrong? {firstName(author.name)} gets it{nodeKey ? " with this step attached" : ""}.
+      </label>
+      <textarea
+        id={`report-${nodeKey ?? "card"}`}
+        rows={2}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="e.g. We never retry card declines, only network errors."
+        className="w-full resize-none rounded-sm bg-surface-1 px-3 py-2.5 t-body text-fg-1 shadow-ring-strong outline-none placeholder:text-fg-3 focus-visible:shadow-[0_0_0_2px_var(--focus)]"
+      />
+      <div className="flex gap-2">
+        <Button type="submit" loading={state === "sending"} disabled={text.trim().length < 3}>
+          Send to {firstName(author.name)}
+        </Button>
+        <Button variant="ghost" onClick={() => setState("idle")}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }

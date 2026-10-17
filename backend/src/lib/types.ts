@@ -36,7 +36,29 @@ export type Explanation = {
   flow: { before: FlowGraph | null; after: FlowGraph };
   walkthrough?: Walkthrough;
   levels: Record<LevelKey, LevelText>;
+  /** How well this explanation matches the code, from checks and a second model. */
+  verification?: Verification;
+  /** The lines of the diff behind each flowchart step, by node key. */
+  evidence?: Record<string, Evidence>;
 };
+
+export type Verification = {
+  /** 0 to 100. */
+  score: number;
+  confidence: "high" | "medium" | "low";
+  /** "ai": code checks plus a second model; "code": code checks only; "sample": a hand-written sample. */
+  checkedBy: "ai" | "code" | "sample";
+  /** Problems found, in plain words, for the engineer. */
+  issues: string[];
+  /** True when the first attempt scored low and was rewritten with the problems as feedback. */
+  retried: boolean;
+  /** Low confidence even after a retry: the engineer should read it before anyone relies on it. */
+  needsReview: boolean;
+  checkedAt: string;
+};
+
+/** A few diff lines: "+" added, "-" removed, " " unchanged. */
+export type Evidence = { file: string; url?: string; line?: number; lines: { kind: "+" | "-" | " "; text: string }[] };
 
 export type FileChange = { path: string; additions: number; deletions: number; url: string };
 
@@ -65,7 +87,12 @@ export type CardEdits = {
   levels?: Partial<Record<LevelKey, Partial<Record<EditableField, string>>>>;
 };
 
-export type ExplainEvent = { type: "start"; title: string } | { type: "finding"; text: string } | { type: "writing" };
+export type ExplainEvent =
+  | { type: "start"; title: string }
+  | { type: "finding"; text: string }
+  | { type: "writing" }
+  | { type: "checking" }
+  | { type: "rewriting" };
 
 export type ApiErrorCode =
   | "invalid_url"
@@ -100,6 +127,12 @@ export type User = {
   focus: Focus[];
   language: "en" | "hinglish";
   status: "active" | "invited";
+  /** When they accepted the Terms and Privacy Policy, and which versions. Unset for sample people. */
+  termsAcceptedAt?: string;
+  termsVersion?: string;
+  privacyVersion?: string;
+  /** Product update emails. Off unless they ticked the box. */
+  marketingOptIn?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -129,10 +162,17 @@ export type StoredCard = Card & {
   source: "manual" | "sync" | "webhook" | "demo";
   createdAt: string;
   approvedAt?: string;
+  /** How many times readers reported a mistake in this explanation. */
+  reports?: number;
 };
 
 /** Text written once and stored at every reading level. */
-export type Translated = { text: string; levels?: Partial<Record<LevelKey, string>> };
+export type Translated = {
+  text: string;
+  levels?: Partial<Record<LevelKey, string>>;
+  /** Hinglish versions for the non-technical levels, for people who chose Hinglish. */
+  hinglish?: Partial<Record<LevelKey, string>>;
+};
 
 /** An engineer's comment: written in Rosetta or synced from GitHub. */
 export type Comment = Translated & {
@@ -155,6 +195,8 @@ export type Ticket = {
   fromId: string;
   toId: string;
   subject: string;
+  /** "report": someone thinks the explanation of a change is wrong. */
+  kind?: "question" | "report";
   /** Set when the question is about one step of one card (Ask Why). */
   context?: { cardId: string; nodeKey: string; technicalQuestion?: string };
   status: "open" | "answered" | "closed";

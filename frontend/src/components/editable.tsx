@@ -36,19 +36,22 @@ export function Editable({ as: Tag = "p", value, editable, label, onCommit, clas
     }
   };
 
+  // The element keeps its meaning (a heading stays a heading); the editable box lives inside it.
   return (
-    <Tag
-      key={value}
-      contentEditable="plaintext-only"
-      suppressContentEditableWarning
-      role="textbox"
-      aria-label={label}
-      spellCheck
-      onBlur={commit}
-      onKeyDown={onKeyDown}
-      className={cn("editable", className)}
-    >
-      {value}
+    <Tag className={className}>
+      <span
+        key={value}
+        contentEditable="plaintext-only"
+        suppressContentEditableWarning
+        role="textbox"
+        aria-label={label}
+        spellCheck
+        onBlur={commit}
+        onKeyDown={onKeyDown}
+        className="editable block"
+      >
+        {value}
+      </span>
     </Tag>
   );
 }

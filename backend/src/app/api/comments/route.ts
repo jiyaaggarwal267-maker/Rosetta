@@ -3,7 +3,7 @@ import { json, preflight, route } from "@/lib/http";
 import { descendants, orgMembers, personOf, visibleAuthorIds } from "@/lib/org";
 import { store } from "@/lib/store";
 import { after } from "next/server";
-import { backfill, display } from "@/lib/translate";
+import { backfill, displayFor } from "@/lib/translate";
 import type { Comment, StoredCard } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -56,7 +56,7 @@ export const GET = route(async (req) => {
         githubUrl: c.githubUrl,
         repo: c.repo,
         createdAt: c.createdAt,
-        ...display(c, me.role),
+        ...displayFor(c, me),
       };
     });
 

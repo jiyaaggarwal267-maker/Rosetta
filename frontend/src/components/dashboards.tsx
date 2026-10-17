@@ -12,7 +12,7 @@ import { Page } from "./app-shell";
 import { Button, buttonStyles } from "./button";
 import { ComposeQuestion } from "./compose-question";
 import { ExplainBox } from "./explain-box";
-import { FeedList, FilterChips, personChip, StatTile } from "./feed";
+import { FeedList, FeedTools, FilterChips, LoadMore, NO_TOOLS, personChip, StatTile, type ToolsValue } from "./feed";
 import { Avatar, PersonLine } from "./person";
 
 /** Each role lands somewhere different. */
@@ -25,22 +25,54 @@ export function RoleHome() {
   return <EngineerHome user={user} />;
 }
 
-function useData(filters: { author?: string | null; team?: string | null; status?: string | null }) {
+function useData(filters: { author?: string | null; team?: string | null; status?: string | null } & Partial<ToolsValue>) {
   const [feed, setFeed] = useState<Feed | null>(null);
   const [error, setError] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const key = JSON.stringify(filters);
+  const params = useCallback(() => {
+    const f = JSON.parse(key) as Record<string, string | null | undefined>;
+    return Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v || undefined])) as api.FeedFilters;
+  }, [key]);
   const load = useCallback(() => {
-    const f = JSON.parse(key) as Record<string, string | null>;
+    let current = true;
     api
-      .getFeed({ author: f.author ?? undefined, team: f.team ?? undefined, status: f.status ?? undefined })
+      .getFeed(params())
       .then((data) => {
+        if (!current) return;
         setFeed(data);
         setError(false);
       })
-      .catch(() => setError(true));
-  }, [key]);
+      .catch(() => current && setError(true));
+    return () => {
+      current = false;
+    };
+  }, [params]);
   useEffect(load, [load]);
-  return { feed, error, reload: load };
+  const loadMore = useCallback(async () => {
+    if (!feed?.page.more) return;
+    setLoadingMore(true);
+    try {
+      const next = await api.getFeed({ ...params(), offset: String(feed.items.length) });
+      setFeed((f) => (f ? { ...next, items: [...f.items, ...next.items.filter((i) => !f.items.some((x) => x.id === i.id))] } : next));
+    } catch {
+      toast("Couldn't load more. Try again in a minute.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [feed, params]);
+  return { feed, error, reload: load, loadMore, loadingMore };
+}
+
+/** Search box state with a short pause, so typing doesn't fire a request per key. */
+function useTools() {
+  const [tools, setTools] = useState<ToolsValue>(NO_TOOLS);
+  const [query, setQuery] = useState(NO_TOOLS);
+  useEffect(() => {
+    const t = window.setTimeout(() => setQuery(tools), tools.q === query.q ? 0 : 300);
+    return () => window.clearTimeout(t);
+  }, [tools, query.q]);
+  return { tools, setTools, query };
 }
 
 function useMembers() {
@@ -74,7 +106,8 @@ function Unavailable() {
 
 function EngineerHome({ user }: { user: User }) {
   const [status, setStatus] = useState<string | null>(null);
-  const { feed, error } = useData({ status });
+  const { tools, setTools, query } = useTools();
+  const { feed, error, reload, loadMore, loadingMore } = useData({ status, ...query });
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
 
   useEffect(() => {
@@ -113,9 +146,12 @@ function EngineerHome({ user }: { user: User }) {
                 render={(o) => o.label}
               />
             </div>
+            <FeedTools value={tools} onChange={setTools} repos={feed.repos} />
             <FeedList
               items={feed.items}
               showAuthor={false}
+              filtered={tools !== NO_TOOLS}
+              onDeleted={() => reload()}
               empty={
                 <>
                   <p className="t-body font-medium text-fg-1">No changes yet.</p>
@@ -127,6 +163,7 @@ function EngineerHome({ user }: { user: User }) {
                 </>
               }
             />
+            <LoadMore page={feed.page} shown={feed.items.length} loading={loadingMore} onMore={loadMore} />
           </div>
 
           <aside className="grid min-w-0 grid-cols-1 gap-6 card:col-span-4">
@@ -146,7 +183,7 @@ function EngineerHome({ user }: { user: User }) {
             </section>
             <section className="rounded-md bg-surface-1 p-6 shadow-elev-1">
               <h2 className="t-heading text-fg-1">Explain a commit</h2>
-              <p className="mt-1 mb-4 t-small text-fg-2">Paste any public commit or pull request.</p>
+              <p className="mt-1 mb-4 t-small text-fg-2">Paste a public commit or pull request you have permission to share.</p>
               <ExplainBox samples />
             </section>
           </aside>
@@ -181,7 +218,8 @@ function LeadHome({ user }: { user: User }) {
   const cmo = user.role === "cmo";
   const [author, setAuthor] = useState<string | null>(null);
   const [team, setTeam] = useState<string | null>(null);
-  const { feed, error, reload } = useData({ author, team });
+  const { tools, setTools, query } = useTools();
+  const { feed, error, reload, loadMore, loadingMore } = useData({ author, team, ...query });
   const members = useMembers();
   const [comments, setComments] = useState<CommentView[] | null>(null);
   const [asking, setAsking] = useState<{ open: boolean; toId?: string }>({ open: false });
@@ -327,7 +365,9 @@ function LeadHome({ user }: { user: User }) {
                 <h2 className="t-heading text-fg-1">{author ? `Changes by ${people.find((p) => p.id === author)?.name ?? ""}` : "Latest changes"}</h2>
               </div>
               <FilterChips label={cmo ? "Person" : "Engineer"} options={people} value={author} onChange={setAuthor} render={personChip} />
-              <FeedList items={feed.items} empty={<p className="t-body text-fg-2">Nothing here yet.</p>} />
+              <FeedTools value={tools} onChange={setTools} repos={feed.repos} />
+              <FeedList items={feed.items} filtered={tools !== NO_TOOLS} empty={<p className="t-body text-fg-2">Nothing here yet.</p>} />
+              <LoadMore page={feed.page} shown={feed.items.length} loading={loadingMore} onMore={loadMore} />
             </section>
 
             <aside className="grid min-w-0 grid-cols-1 gap-6 card:col-span-4">

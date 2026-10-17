@@ -29,6 +29,7 @@ export function tabsFor(role: Role): { href: string; label: string }[] {
   if (role === "cmo")
     return [
       { href: "/app", label: "Overview" },
+      { href: "/app/digest", label: "This week" },
       { href: "/app/updates", label: "Engineer updates" },
       { href: "/app/questions", label: "Questions" },
       { href: "/app/team", label: "Organisation" },
@@ -36,6 +37,7 @@ export function tabsFor(role: Role): { href: string; label: string }[] {
   if (role === "manager")
     return [
       { href: "/app", label: "Team activity" },
+      { href: "/app/digest", label: "This week" },
       { href: "/app/updates", label: "Engineer updates" },
       { href: "/app/questions", label: "Questions" },
       { href: "/app/team", label: "My team" },
@@ -43,6 +45,7 @@ export function tabsFor(role: Role): { href: string; label: string }[] {
   if (role === "client")
     return [
       { href: "/app", label: "Updates" },
+      { href: "/app/digest", label: "This week" },
       { href: "/app/questions", label: "Questions" },
     ];
   return [

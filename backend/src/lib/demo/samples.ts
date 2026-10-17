@@ -1,5 +1,5 @@
 import { LEVELS, type LevelKey } from "../levels";
-import type { Card, Explanation, FileChange, FlowGraph, LevelText } from "../types";
+import type { Card, Evidence, Explanation, FileChange, FlowGraph, LevelText, Verification } from "../types";
 
 /**
  * The three demo commits, written by hand. They back the home page demo,
@@ -11,9 +11,9 @@ import type { Card, Explanation, FileChange, FlowGraph, LevelText } from "../typ
 
 export const DEMO_REPO = process.env.DEMO_REPO || process.env.NEXT_PUBLIC_DEMO_REPO || "code-crunchers/rosetta-demo";
 
-type Six = [string, string, string, string, string, string];
+export type Six = [string, string, string, string, string, string];
 
-type Spec = {
+export type Spec = {
   summary: Six;
   analogy: Six;
   impact: Six;
@@ -24,7 +24,7 @@ type Spec = {
   walk: Six[];
 };
 
-function levelsFrom(spec: Spec): Record<LevelKey, LevelText> {
+export function levelsFrom(spec: Spec): Record<LevelKey, LevelText> {
   return Object.fromEntries(
     LEVELS.map(({ key }, i) => [
       key,
@@ -469,6 +469,80 @@ const retry: Explanation = {
 };
 
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* Evidence for the samples: the lines behind each step                */
+/* ------------------------------------------------------------------ */
+
+/** "+added", "-removed", " unchanged", one string per line. */
+const ev = (sha: string, path: string, line: number, lines: string[]): Evidence => ({
+  file: path,
+  url: `https://github.com/${DEMO_REPO}/blob/${sha}/${path}#L${line}`,
+  line,
+  lines: lines.map((l) => ({ kind: l[0] as "+" | "-" | " ", text: l.slice(1) })),
+});
+
+const sampleCheck = (): Verification => ({
+  score: 100,
+  confidence: "high",
+  checkedBy: "sample",
+  issues: [],
+  retried: false,
+  needsReview: false,
+  checkedAt: "2026-01-01T00:00:00.000Z",
+});
+
+roundRobin.verification = sampleCheck();
+roundRobin.evidence = {
+  move_counter: ev(rrSha, "src/balancer.js", 6, [
+    " let current = -1;",
+    "+export function pickNextServer() {",
+    "+  current = (current + 1) % servers.length;",
+    "+  return servers[current];",
+    "+}",
+  ]),
+  pick: ev(rrSha, "src/balancer.js", 13, [
+    " app.use(async (req, res) => {",
+    "-  const upstream = servers[0];",
+    "+  const upstream = pickNextServer();",
+    "   return proxy(req, res, upstream);",
+  ]),
+  server_a: ev(rrSha, "config/servers.json", 2, [" {", '   "servers": [', '     "http://10.0.0.11:8080",', '+    "http://10.0.0.12:8080",', '+    "http://10.0.0.13:8080"']),
+  server_b: ev(rrSha, "config/servers.json", 4, ['     "http://10.0.0.11:8080",', '+    "http://10.0.0.12:8080",', '+    "http://10.0.0.13:8080"']),
+  server_c: ev(rrSha, "config/servers.json", 5, ['+    "http://10.0.0.12:8080",', '+    "http://10.0.0.13:8080"', "   ]"]),
+  server_b_idle: ev(rrSha, "src/balancer.js", 14, ["-  const upstream = servers[0];"]),
+};
+
+caching.verification = sampleCheck();
+caching.evidence = {
+  check: ev(cacheSha, "src/products.js", 8, [
+    " export async function getProduct(id) {",
+    "+  const hit = cache.get(id);",
+    "+  if (hit && Date.now() - hit.savedAt < TTL_MS) return hit.row;",
+  ]),
+  memory: ev(cacheSha, "src/products.js", 9, ["+  if (hit && Date.now() - hit.savedAt < TTL_MS) return hit.row;"]),
+  db: ev(cacheSha, "src/products.js", 10, ['   const row = await db.query("SELECT * FROM products WHERE id = $1", [id]);']),
+  save: ev(cacheSha, "src/products.js", 11, ["+  cache.set(id, { row, savedAt: Date.now() });", "   return row;", " }"]),
+  cache_box: ev(cacheSha, "src/cache.js", 1, ["+// Short-lived, per-process memory for hot product reads.", "+export const TTL_MS = 60_000;", "+export const cache = new Map();"]),
+};
+
+retry.verification = sampleCheck();
+retry.evidence = {
+  call_bank: ev(retrySha, "src/payments/charge.js", 12, [
+    "-  return gateway.charge(order.total, card);",
+    "+  return withRetry(() =>",
+    "+    gateway.charge(order.total, card, { idempotencyKey: order.id }),",
+    "+  );",
+  ]),
+  temporary: ev(retrySha, "src/lib/retry.js", 9, [
+    "     } catch (err) {",
+    "+      const temporary = err.code === \"ECONNRESET\" || err.status >= 500;",
+    "+      if (!temporary || attempt === 3) throw err;",
+  ]),
+  wait: ev(retrySha, "src/lib/retry.js", 11, ["+      await sleep(200 * 2 ** (attempt - 1)); // 200, 400, 800 ms", "     }"]),
+  retry_box: ev(retrySha, "src/lib/retry.js", 3, ["+export async function withRetry(fn) {", "+  for (let attempt = 1; attempt <= 3; attempt++) {", "+    try {", "+      return await fn();"]),
+  failed: ev(retrySha, "src/lib/retry.js", 10, ["+      if (!temporary || attempt === 3) throw err;"]),
+};
 
 export type Sample = {
   key: "round-robin" | "caching" | "retry";

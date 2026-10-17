@@ -17,6 +17,7 @@ type SessionValue = {
   resetPassword: (token: string, password: string) => Promise<User>;
   login: (email: string, password: string) => Promise<User>;
   updateProfile: (patch: Parameters<typeof api.updateMe>[0]) => Promise<User>;
+  renameWorkspace: (name: string) => Promise<void>;
   logout: () => void;
 };
 
@@ -90,6 +91,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const next = await api.updateMe(patch);
         setUser(next);
         return next;
+      },
+      renameWorkspace: async (name) => {
+        const { org: next } = await api.updateOrg({ name });
+        setOrg((o) => (o ? { ...o, name: next.name } : o));
       },
       logout: signOut,
     }),

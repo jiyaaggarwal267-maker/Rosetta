@@ -37,6 +37,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       className={`${bricolage.variable} ${geist.variable} ${geistMono.variable}`}
     >
       <body>
+        <a href="#main" className="skip-link">
+          Skip to content
+        </a>
         <Providers>{children}</Providers>
       </body>
     </html>

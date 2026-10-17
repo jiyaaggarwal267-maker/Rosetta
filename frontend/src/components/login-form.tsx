@@ -44,7 +44,7 @@ export function LoginForm() {
   };
 
   return (
-    <main className="mx-auto grid min-h-[calc(100svh-var(--nav-h))] max-w-(--w-app) place-items-center px-(--gutter) py-16">
+    <main id="main" tabIndex={-1} className="mx-auto grid min-h-[calc(100svh-var(--nav-h))] max-w-(--w-app) place-items-center px-(--gutter) py-16">
       <div className="w-full max-w-[26rem]">
         <h1 className="t-title text-fg-1">Log in</h1>
         <p className="mt-3 t-body text-fg-2">You&rsquo;ll land in your own view: your work, your team, or your whole organisation.</p>
@@ -53,6 +53,7 @@ export function LoginForm() {
           <Field
             ref={emailRef}
             label="Email"
+            required
             name="email"
             type="email"
             autoComplete="email"
@@ -62,6 +63,7 @@ export function LoginForm() {
           />
           <Field
             label="Password"
+            required
             name="password"
             type="password"
             autoComplete="current-password"

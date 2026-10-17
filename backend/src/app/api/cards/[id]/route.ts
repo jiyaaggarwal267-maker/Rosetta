@@ -1,10 +1,11 @@
 import { requireUser } from "@/lib/auth";
 import { publicCard } from "@/lib/cards";
 import { ApiError, json, preflight, route } from "@/lib/http";
-import { canSeeCard, orgMembers, personOf } from "@/lib/org";
+import { canReview, canSeeCard, orgMembers, personOf, requireOrg } from "@/lib/org";
+import type { Notification } from "@/lib/notify";
 import { store } from "@/lib/store";
 import { after } from "next/server";
-import { backfill, display } from "@/lib/translate";
+import { backfill, displayFor } from "@/lib/translate";
 import type { Comment, StoredCard } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -39,9 +40,38 @@ export const GET = route<Ctx>(async (req, { params }) => {
         source: c.source,
         githubUrl: c.githubUrl,
         createdAt: c.createdAt,
-        ...display(c, me.role),
+        ...displayFor(c, me),
       };
     });
 
   return json({ ...publicCard(card, me, users), comments });
+});
+
+/**
+ * DELETE /api/cards/:id: the engineer who made the change (or the workspace
+ * owner) removes it, with its comments and notifications. Paste the link
+ * again to bring it back; sync won't re-add it on its own.
+ */
+export const DELETE = route<Ctx>(async (req, { params }) => {
+  const { id } = await params;
+  const me = await requireUser(req);
+  const card = await store.get<StoredCard>("cards", id);
+  const users = await orgMembers(me.orgId);
+  if (!card || !canSeeCard(me, card, users)) throw new ApiError("not_found");
+  const org = await requireOrg(me);
+  if (!canReview(me, card) && org.ownerId !== me.id) {
+    throw new ApiError("forbidden", "Only the engineer who made this change can delete it.");
+  }
+
+  const [comments, notes] = await Promise.all([
+    store.list<Comment>("comments", "cardId", id),
+    store.list<Notification>("notifications", "orgId", me.orgId),
+  ]);
+  await Promise.all([
+    store.remove("cards", id),
+    ...comments.map((c) => store.remove("comments", c.id)),
+    ...notes.filter((n) => n.href === `/app/c/${id}`).map((n) => store.remove("notifications", n.id)),
+  ]);
+  await store.set("deleted", id, { orgId: me.orgId, repo: card.repo, by: me.id, at: new Date().toISOString() });
+  return json({ deleted: id });
 });

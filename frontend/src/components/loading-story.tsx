@@ -28,7 +28,15 @@ export function InlineCode({ text }: { text: string }) {
  * The wait explains the work: lines come from the diff itself, before the
  * AI call returns (FR-6.1).
  */
-export function LoadingStory({ title, findings, writing }: { title?: string; findings: string[]; writing: boolean }) {
+const STAGES = ["writing", "checking", "rewriting"] as const;
+const STAGE_TEXT: Record<(typeof STAGES)[number], string> = {
+  writing: "Writing explanations for six readers",
+  checking: "Checking them against the code",
+  rewriting: "Fixing what the check found",
+};
+
+export function LoadingStory({ title, findings, stage }: { title?: string; findings: string[]; stage: (typeof STAGES)[number] | null }) {
+  const reached = stage ? STAGES.indexOf(stage) : -1;
   return (
     <div className="w-full text-left" role="status" aria-live="polite">
       <motion.p {...enter} className="t-heading text-fg-1">
@@ -43,12 +51,12 @@ export function LoadingStory({ title, findings, writing }: { title?: string; fin
             </span>
           </motion.li>
         ))}
-        {writing && (
-          <motion.li {...enter} className="flex items-center gap-3 t-body text-fg-1">
-            <Spinner className="text-fg-2" />
-            Writing explanations for six readers
+        {STAGES.slice(0, reached + 1).map((s, i) => (
+          <motion.li key={s} {...enter} className="flex items-center gap-3 t-body text-fg-1">
+            {i < reached ? <CheckIcon className="shrink-0 text-steel" /> : <Spinner className="text-fg-2" />}
+            {STAGE_TEXT[s]}
           </motion.li>
-        )}
+        ))}
       </ul>
     </div>
   );

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import * as api from "@/lib/api";
 import { isTechnical } from "@/lib/roles";
+import { langFor } from "@/lib/lang";
 import { useSession } from "@/lib/session";
 import type { Member, TicketDetail, TicketSummary } from "@/lib/types";
 import { cn, firstName, timeAgo } from "@/lib/utils";
@@ -14,8 +15,8 @@ import { ComposeQuestion } from "./compose-question";
 import { Avatar, PersonLine } from "./person";
 
 const STATUS: Record<TicketSummary["status"], { label: string; className: string }> = {
-  open: { label: "Waiting for a reply", className: "bg-[color-mix(in_srgb,var(--risk-medium)_12%,transparent)] text-(--risk-medium)" },
-  answered: { label: "Answered", className: "bg-[color-mix(in_srgb,var(--risk-low)_12%,transparent)] text-(--risk-low)" },
+  open: { label: "Waiting for a reply", className: "bg-[color-mix(in_srgb,var(--risk-medium)_8%,transparent)] tone-pill text-(--risk-medium)" },
+  answered: { label: "Answered", className: "bg-[color-mix(in_srgb,var(--risk-low)_8%,transparent)] tone-pill text-(--risk-low)" },
   closed: { label: "Closed", className: "bg-surface-2 text-fg-3" },
 };
 
@@ -72,7 +73,7 @@ export function QuestionsList() {
               )}
             >
               {t === "received" ? "Asked of me" : "I asked"}
-              {count > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-steel px-1.5 t-micro text-paper">{count}</span>}
+              {count > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-deep px-1.5 t-micro text-paper">{count}</span>}
             </button>
           );
         })}
@@ -96,9 +97,14 @@ export function QuestionsList() {
                   href={`/app/questions/${t.id}`}
                   className="press flex items-start gap-4 rounded-md bg-surface-1 p-5 shadow-elev-1 transition-[box-shadow] duration-150 hover:shadow-elev-2"
                 >
-                  <Avatar name={t.other?.name ?? "?"} />
+                  <Avatar name={t.other?.name ?? "Former member"} />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
+                      {t.kind === "report" && (
+                        <span className="inline-flex h-6 items-center rounded-xs bg-[color-mix(in_srgb,var(--risk-high)_8%,transparent)] tone-pill px-2 t-micro text-(--risk-high)">
+                          Reported mistake
+                        </span>
+                      )}
                       <span className="t-body font-semibold text-fg-1">{t.subject}</span>
                       {t.unread && <span className="size-2 rounded-full bg-steel" aria-label="Unread" />}
                     </div>
@@ -128,6 +134,7 @@ export function QuestionThread({ id }: { id: string }) {
   const [failed, setFailed] = useState(false);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const { user } = useSession();
   const [original, setOriginal] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -206,12 +213,13 @@ export function QuestionThread({ id }: { id: string }) {
             const showOriginal = original.has(m.id);
             return (
               <li key={m.id} className={cn("flex gap-3", m.mine && "flex-row-reverse")}>
-                <Avatar name={m.author?.name ?? "?"} size={32} lead={m.mine} />
+                <Avatar name={m.author?.name ?? "Former member"} size={32} lead={m.mine} />
                 <div className={cn("grid max-w-[36rem] gap-1", m.mine && "justify-items-end")}>
                   <p className="t-micro text-fg-3">
-                    {m.mine ? "You" : firstName(m.author?.name ?? "")} · {timeAgo(m.createdAt)}
+                    {m.mine ? "You" : m.author ? firstName(m.author.name) : "Former member"} · {timeAgo(m.createdAt)}
                   </p>
                   <p
+                    lang={langFor(user?.language, m.translated && !showOriginal)}
                     className={cn(
                       "rounded-md px-4 py-3 t-body text-fg-1",
                       m.mine ? "rounded-tr-xs bg-surface-2" : "rounded-tl-xs bg-surface-1 shadow-elev-1",

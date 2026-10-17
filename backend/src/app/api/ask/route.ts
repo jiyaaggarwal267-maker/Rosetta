@@ -3,6 +3,8 @@ import { aiConfigured } from "@/lib/ai/provider";
 import { answerQuestion } from "@/lib/ai/tasks";
 import { requireUser } from "@/lib/auth";
 import { demoSampleFor } from "@/lib/cards";
+import { isPitchCommit, PITCH_FILES, PITCH_NOTES } from "@/lib/demo/pitch";
+import { isPitchQuestion, PITCH_QUESTION } from "@/lib/demo/pitch-script";
 import { diffText, trimFiles } from "@/lib/diff";
 import { env } from "@/lib/env";
 import { filesFor } from "@/lib/github";
@@ -40,19 +42,28 @@ export const POST = route(async (req) => {
   const askTo = authorUser && authorUser.id !== me.id ? personOf(authorUser, users) : null;
   const step = card.explanation.levels.engineer.labels[input.nodeKey] ?? input.nodeKey;
 
-  let result: { answerable: boolean; answer: string; technical_question: string };
-  if (aiConfigured()) {
-    const files = await filesFor(card).catch(() => []);
-    result = await answerQuestion({
-      explanation: card.explanation,
-      level: me.role,
-      nodeKey: input.nodeKey,
-      question: input.question,
-      diff: files.length ? diffText(trimFiles(files, env.maxDiffLines).files) : "(diff unavailable; use the explanation)",
-    });
-  } else {
+  const pitch = isPitchCommit(card.repo, card.headSha);
+  let result: { answerable: boolean; answer: string; technical_question: string } | null = null;
+  if (pitch && isPitchQuestion(input.question)) {
+    result = { answerable: false, answer: "", technical_question: PITCH_QUESTION.levels.engineer };
+  } else if (aiConfigured()) {
+    const files = pitch ? PITCH_FILES : await filesFor(card).catch(() => []);
+    try {
+      result = await answerQuestion({
+        explanation: card.explanation,
+        level: me.role,
+        nodeKey: input.nodeKey,
+        question: input.question,
+        diff: files.length ? diffText(trimFiles(files, env.maxDiffLines).files) : "(diff unavailable; use the explanation)",
+      });
+    } catch (error) {
+      // Out of quota mid-demo: the written notes below still answer the sample and pitch commits.
+      if (!pitch && !demoSampleFor(card.repo, card.headSha)) throw error;
+    }
+  }
+  if (!result) {
     // No model: the demo commits still answer from their written notes.
-    const note = demoSampleFor(card.repo, card.headSha)?.notes[input.nodeKey];
+    const note = pitch ? PITCH_NOTES[input.nodeKey] : demoSampleFor(card.repo, card.headSha)?.notes[input.nodeKey];
     if (NEEDS_ENGINEER.test(input.question) || !note) {
       result = {
         answerable: false,

@@ -6,7 +6,11 @@
     "dev": "next dev -p 4000",
     "build": "next build",
     "start": "next start -p 4000",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 \"test/*.test.mjs\"",
+    "demo": "node scripts/create-demo.mjs",
+    "pitch:judge": "node scripts/judge-pitch.mjs",
+    "migrate": "node scripts/migrate-file-to-firestore.mjs"
   },
   "dependencies": {
     "firebase-admin": "^14.5.0",

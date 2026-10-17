@@ -15,6 +15,20 @@ const language = z.enum(["en", "hinglish"]);
 
 export const roleSchema = z.enum(ROLES);
 
+/** Required tick for the Terms and Privacy Policy, optional tick for product emails. */
+const consent = {
+  acceptTerms: z.boolean().optional(),
+  marketingOptIn: z.boolean().default(false),
+};
+
+/** Signup and join refuse to continue without the Terms ticked. */
+export function requireTerms(acceptTerms: boolean | undefined) {
+  if (acceptTerms !== true) {
+    return "Tick the box to agree to the Terms and confirm you've read the Privacy Policy.";
+  }
+  return null;
+}
+
 /** Creating a workspace: only the person at the top (a CMO or a manager) signs up directly. */
 export const signupSchema = z.object({
   name,
@@ -27,6 +41,7 @@ export const signupSchema = z.object({
   githubLogin,
   focus: focus.default([]),
   language: language.default("en"),
+  ...consent,
 });
 
 /** A lead adding someone under them. */
@@ -49,6 +64,7 @@ export const joinSchema = z.object({
   githubLogin,
   focus: focus.optional(),
   language: language.optional(),
+  ...consent,
 });
 
 /** What people may change about themselves. Their role is set by whoever added them. */
@@ -59,4 +75,5 @@ export const meSchema = z.object({
   teamName: optionalText,
   focus: focus.optional(),
   language: language.optional(),
+  marketingOptIn: z.boolean().optional(),
 });

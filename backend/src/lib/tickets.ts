@@ -1,5 +1,5 @@
 import { personOf } from "./org";
-import { display } from "./translate";
+import { displayFor } from "./translate";
 import type { StoredCard, Ticket, User } from "./types";
 
 /** A ticket as one participant sees it. */
@@ -12,6 +12,7 @@ export function ticketView(t: Ticket, me: User, users: User[], cardTitle?: strin
   return {
     id: t.id,
     subject: t.subject,
+    kind: t.kind ?? "question",
     status: t.status,
     direction: t.fromId === me.id ? ("sent" as const) : ("received" as const),
     from: from ? personOf(from, users) : null,
@@ -20,7 +21,7 @@ export function ticketView(t: Ticket, me: User, users: User[], cardTitle?: strin
     unread: t.unreadBy.includes(me.id),
     updatedAt: t.updatedAt,
     createdAt: t.createdAt,
-    preview: last ? display(last, me.role).text.slice(0, 160) : "",
+    preview: last ? displayFor(last, me).text.slice(0, 160) : "",
     context: t.context
       ? {
           cardId: t.context.cardId,
@@ -36,7 +37,7 @@ export function ticketView(t: Ticket, me: User, users: User[], cardTitle?: strin
 export function ticketDetail(t: Ticket, me: User, users: User[], card?: StoredCard | null) {
   return {
     ...ticketView(t, me, users, card?.explanation.title),
-    stepLabel: t.context && card ? (card.explanation.levels[me.role].labels[t.context.nodeKey] ?? t.context.nodeKey) : null,
+    stepLabel: t.context?.nodeKey && card ? (card.explanation.levels[me.role].labels[t.context.nodeKey] ?? t.context.nodeKey) : null,
     messages: t.messages.map((m) => {
       const author = users.find((u) => u.id === m.authorId);
       return {
@@ -44,7 +45,7 @@ export function ticketDetail(t: Ticket, me: User, users: User[], card?: StoredCa
         author: author ? personOf(author, users) : null,
         mine: m.authorId === me.id,
         createdAt: m.createdAt,
-        ...display(m, me.role),
+        ...displayFor(m, me),
       };
     }),
   };

@@ -2,14 +2,24 @@ import { z } from "zod";
 import { env } from "./env";
 import type { ApiErrorCode } from "./types";
 
-type ServerCode = ApiErrorCode | "unauthorized" | "forbidden" | "bad_request" | "conflict" | "invalid_credentials";
+type ServerCode =
+  | ApiErrorCode
+  | "unauthorized"
+  | "forbidden"
+  | "bad_request"
+  | "conflict"
+  | "invalid_credentials"
+  | "rate_limited"
+  | "terms_required";
 
 const STATUS: Record<ServerCode, number> = {
   invalid_url: 400,
   bad_request: 400,
+  terms_required: 400,
   unauthorized: 401,
   invalid_credentials: 401,
   conflict: 409,
+  rate_limited: 429,
   forbidden: 403,
   private: 403,
   not_found: 404,

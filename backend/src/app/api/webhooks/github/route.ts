@@ -7,6 +7,8 @@ import { translated } from "@/lib/translate";
 import type { Comment, Org, StoredCard } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+// Explaining, checking and one rewrite can take a couple of minutes (the Vercel Hobby maximum is 300 s).
+export const maxDuration = 300;
 
 type Push = { repository?: { full_name: string }; commits?: { id: string; author?: { username?: string } }[] };
 type CommentEvent = {

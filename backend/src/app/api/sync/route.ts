@@ -4,6 +4,8 @@ import { isLead, orgMembers, requireOrg } from "@/lib/org";
 import { syncOrg } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
+// Explaining, checking and one rewrite can take a couple of minutes (the Vercel Hobby maximum is 300 s).
+export const maxDuration = 300;
 export const OPTIONS = preflight;
 
 /** POST /api/sync: pull new commits and comments from the watched repos now. */

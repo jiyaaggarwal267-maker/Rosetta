@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { Toaster } from "sonner";
 import { SessionProvider } from "@/lib/session";
 import { useMediaQuery } from "@/lib/use-media-query";
+import { ConsentBanner } from "./consent-banner";
 
 export function Providers({ children }: { children: ReactNode }) {
   const desktop = useMediaQuery("(min-width: 768px)", true);
@@ -17,6 +18,7 @@ export function Providers({ children }: { children: ReactNode }) {
         <SessionProvider>
         <Tooltip.Provider delay={300}>
           {children}
+          <ConsentBanner />
           <Toaster
             position={desktop ? "bottom-right" : "top-center"}
             toastOptions={{

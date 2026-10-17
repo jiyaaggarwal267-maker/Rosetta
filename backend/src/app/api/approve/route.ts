@@ -3,6 +3,8 @@ import { requireUser } from "@/lib/auth";
 import { editsSchema, publicCard } from "@/lib/cards";
 import { applyEdits } from "@/lib/edits";
 import { ApiError, json, preflight, readJson, route } from "@/lib/http";
+import { after } from "next/server";
+import { notifications } from "@/lib/notify";
 import { canReview, orgMembers } from "@/lib/org";
 import { store } from "@/lib/store";
 import type { CardEdits, StoredCard } from "@/lib/types";
@@ -26,5 +28,9 @@ export const POST = route(async (req) => {
     approvedAt: new Date().toISOString(),
   };
   await store.set("cards", cardId, approved);
-  return json({ card: publicCard(approved, me, await orgMembers(me.orgId)) });
+  const users = await orgMembers(me.orgId);
+  // Their manager hears that it's been checked.
+  const manager = me.managerId ? users.find((u) => u.id === me.managerId) : undefined;
+  if (manager) after(() => notifications.reviewed({ orgId: me.orgId, to: manager.id, authorName: me.name, title: approved.explanation.title, cardId }));
+  return json({ card: publicCard(approved, me, users) });
 });

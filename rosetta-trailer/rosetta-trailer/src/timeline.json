@@ -1,0 +1,87 @@
+{
+  "fps": 30,
+  "frames": 1800,
+  "bpm": 120,
+  "scenes": {
+    "signal": [0, 240],
+    "breakdown": [240, 540],
+    "reveal": [540, 840],
+    "six": [840, 1200],
+    "beyond": [1200, 1500],
+    "impact": [1500, 1680],
+    "final": [1680, 1800]
+  },
+  "s1": {
+    "cursor": 56,
+    "command": "git push origin main",
+    "keys": [72, 75, 77, 81, 84, 86, 89, 91, 95, 98, 100, 103, 105, 107, 110, 114, 117, 119, 122, 124],
+    "enter": 134,
+    "pulse": [138, 172],
+    "split": 172,
+    "line1": 184,
+    "line2": 206,
+    "zoom": 228
+  },
+  "s2": {
+    "commit": 250,
+    "panels": [282, 312, 342],
+    "tangle": [356, 478],
+    "flashes": [390, 414, 438, 456],
+    "riser": [372, 480],
+    "freeze": 480,
+    "silenceEnd": 492,
+    "line1": 494,
+    "line2": 516,
+    "out": 534
+  },
+  "s3": {
+    "point": 560,
+    "expand": [570, 640],
+    "converge": [596, 650],
+    "pulse": 640,
+    "reveal": 660,
+    "sub1": 696,
+    "sub2": 722,
+    "out": 826
+  },
+  "s4": {
+    "card": 846,
+    "url": "github.com/code-crunchers/rosetta-demo/commit/a3f9c2e",
+    "typing": [850, 874],
+    "press": 877,
+    "diff": [882, 912],
+    "link": [900, 926],
+    "core": [906, 990],
+    "labels": [918, 942, 966],
+    "burst": 984,
+    "cards": [990, 998, 1005, 1013, 1020, 1028],
+    "words": [1065, 1095, 1125],
+    "dive": [1168, 1200]
+  },
+  "s5": {
+    "panel": 1204,
+    "beforeIn": 1214,
+    "morph": [1256, 1296],
+    "trace": [1300, 1344],
+    "words1": 1290,
+    "ask": 1350,
+    "travel1": [1362, 1390],
+    "tech": 1390,
+    "reply": [1398, 1436],
+    "travel2": [1438, 1460],
+    "answer": 1460,
+    "words2": 1470
+  },
+  "s6": {
+    "beats": [1515, 1560, 1605],
+    "lift": 1650
+  },
+  "s7": {
+    "converge": [1680, 1710],
+    "logo": 1710,
+    "line1": 1728,
+    "line2": 1746,
+    "sweep": 1758,
+    "fade": [1772, 1800]
+  }
+}

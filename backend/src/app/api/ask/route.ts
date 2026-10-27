@@ -9,8 +9,10 @@ import { diffText, trimFiles } from "@/lib/diff";
 import { env } from "@/lib/env";
 import { filesFor } from "@/lib/github";
 import { ApiError, json, preflight, readJson, route } from "@/lib/http";
-import { canSeeCard, isTechnical, orgMembers, personOf } from "@/lib/org";
+import { canSeeCard, cardOwner, isTechnical, orgMembers, personOf } from "@/lib/org";
+import { limit } from "@/lib/ratelimit";
 import { store } from "@/lib/store";
+import { NODE_KEY, rememberTechnicalQuestion, stepLabelOf } from "@/lib/tickets";
 import type { StoredCard } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +20,7 @@ export const OPTIONS = preflight;
 
 const body = z.object({
   cardId: z.string(),
-  nodeKey: z.string(),
+  nodeKey: z.string().regex(NODE_KEY),
   question: z.string().trim().min(1).max(500),
 });
 
@@ -33,14 +35,16 @@ const NEEDS_ENGINEER = /\b(delay|launch|deadline|timeline|when|date|ship|release
  */
 export const POST = route(async (req) => {
   const me = await requireUser(req);
+  // Each question can cost a model call: a person gets a fair number, not unlimited.
+  limit(`ask:${me.id}`, 20, 10 * 60_000);
   const input = await readJson(req, body);
   const card = await store.get<StoredCard>("cards", input.cardId);
   const users = await orgMembers(me.orgId);
   if (!card || !canSeeCard(me, card, users)) throw new ApiError("not_found");
 
-  const authorUser = users.find((u) => u.id === (card.authorUserId ?? card.createdBy));
+  const authorUser = users.find((u) => u.id === cardOwner(card));
   const askTo = authorUser && authorUser.id !== me.id ? personOf(authorUser, users) : null;
-  const step = card.explanation.levels.engineer.labels[input.nodeKey] ?? input.nodeKey;
+  const step = stepLabelOf(card, "engineer", input.nodeKey) ?? input.nodeKey;
 
   const pitch = isPitchCommit(card.repo, card.headSha);
   let result: { answerable: boolean; answer: string; technical_question: string } | null = null;
@@ -54,6 +58,7 @@ export const POST = route(async (req) => {
         level: me.role,
         nodeKey: input.nodeKey,
         question: input.question,
+        orgId: me.orgId,
         diff: files.length ? diffText(trimFiles(files, env.maxDiffLines).files) : "(diff unavailable; use the explanation)",
       });
     } catch (error) {
@@ -63,7 +68,8 @@ export const POST = route(async (req) => {
   }
   if (!result) {
     // No model: the demo commits still answer from their written notes.
-    const note = pitch ? PITCH_NOTES[input.nodeKey] : demoSampleFor(card.repo, card.headSha)?.notes[input.nodeKey];
+    const notes = pitch ? PITCH_NOTES : demoSampleFor(card.repo, card.headSha)?.notes;
+    const note = notes && Object.hasOwn(notes, input.nodeKey) ? notes[input.nodeKey] : undefined;
     if (NEEDS_ENGINEER.test(input.question) || !note) {
       result = {
         answerable: false,
@@ -74,6 +80,9 @@ export const POST = route(async (req) => {
       result = { answerable: true, answer: isTechnical(me.role) ? note.tech : note.plain, technical_question: "" };
     }
   }
+
+  // Kept server-side: a ticket opened from this answer carries Rosetta's own rewrite, not the sender's copy.
+  if (!result.answerable && result.technical_question) await rememberTechnicalQuestion(me.id, card.id, input.nodeKey, result.technical_question);
 
   return json(
     result.answerable

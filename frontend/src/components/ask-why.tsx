@@ -5,8 +5,9 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode, typ
 import { Drawer } from "vaul";
 import { toast } from "sonner";
 import { ApiError, ask, createTicket, reportMistake } from "@/lib/api";
+import { errorText } from "@/lib/errors";
 import type { LevelKey } from "@/lib/levels";
-import { isTechnical } from "@/lib/roles";
+import { isLead, isTechnical } from "@/lib/roles";
 import type { CardView, Evidence, Person } from "@/lib/types";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { firstName } from "@/lib/utils";
@@ -144,7 +145,13 @@ function Sheet({
   );
 }
 
-const SUGGESTIONS = ["Why was this needed?", "Will this delay the launch?"];
+/** Ready questions that fit the reader: technical readers ask how, everyone else asks what it means for them. */
+const suggestionsFor = (level: LevelKey) =>
+  isTechnical(level)
+    ? ["Why was this needed?", "What could break because of this?"]
+    : level === "client"
+      ? ["Why was this needed?", "What will I notice?"]
+      : ["Why was this needed?", "Will this delay the launch?"];
 
 function AskContent({
   card,
@@ -165,7 +172,7 @@ function AskContent({
   const level = card.explanation.levels[levelKey];
   const evidence = card.explanation.evidence?.[target.key];
   const technical = isTechnical(card.viewer.level) || card.viewer.canReview;
-  const stepLabel = level.labels[target.key] ?? target.key;
+  const stepLabel = level?.labels[target.key] ?? target.key;
 
   const submit = async (text: string) => {
     const q = text.trim();
@@ -184,9 +191,9 @@ function AskContent({
         step: "error",
         question: q,
         message:
-          error instanceof ApiError && error.code === "unavailable"
+          error instanceof ApiError && error.code === "unavailable" && !error.detail
             ? "Rosetta can't answer questions right now. Try again in a minute."
-            : "That didn't work. Try again in a minute.",
+            : errorText(error, "That didn't work. Try again in a minute."),
       });
     }
   };
@@ -202,8 +209,8 @@ function AskContent({
         context: { cardId: card.id, nodeKey: target.key, technicalQuestion: thread.technicalQuestion },
       });
       setThread({ step: "sent", question: thread.question, ticketId: ticket.id, to: thread.askTo.name });
-    } catch {
-      setThread({ step: "error", question: thread.question, message: "That didn't send. Try again in a minute." });
+    } catch (error) {
+      setThread({ step: "error", question: thread.question, message: errorText(error, "That didn't send. Try again in a minute.") });
     }
   };
 
@@ -244,7 +251,7 @@ function AskContent({
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap gap-2">
-            {[...(card.suggestedQuestion ? [card.suggestedQuestion] : []), ...SUGGESTIONS].map((s) => (
+            {[...(card.suggestedQuestion ? [card.suggestedQuestion] : []), ...suggestionsFor(card.viewer.level)].map((s) => (
               <button
                 key={s}
                 type="button"
@@ -307,7 +314,17 @@ function AskContent({
               </div>
             </div>
           ) : (
-            <p className="t-body font-medium text-fg-1">The code can&rsquo;t answer this, and the author isn&rsquo;t in your workspace yet.</p>
+            <div className="grid gap-2">
+              <p className="t-body font-medium text-fg-1">
+                The code can&rsquo;t answer this, and {card.author.name ? firstName(card.author.name) : "the person who wrote it"} isn&rsquo;t in your
+                workspace yet.
+              </p>
+              <p className="t-small text-fg-2">
+                {isLead(card.viewer.level) ? "Add them on the team page" : "Ask your manager to add them on the team page"} with their GitHub
+                username{card.author.login ? <span className="font-mono"> @{card.author.login}</span> : null}. Until then, you can ask
+                someone on your team from Questions.
+              </p>
+            </div>
           ))}
         {thread?.step === "sent" && (
           <div className="grid gap-2">
@@ -397,7 +414,7 @@ export function ReportMistake({ card, nodeKey, label = "This step looks wrong" }
       setState("sent");
     } catch (error) {
       setState("writing");
-      toast(error instanceof ApiError && error.detail ? error.detail : "That didn't send. Try again in a minute.");
+      toast(errorText(error, "That didn't send. Try again in a minute."));
     }
   };
   return (

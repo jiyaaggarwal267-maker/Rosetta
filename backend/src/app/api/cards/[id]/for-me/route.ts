@@ -4,6 +4,7 @@ import { personalNote } from "@/lib/ai/tasks";
 import { requireUser } from "@/lib/auth";
 import { ApiError, json, preflight, route } from "@/lib/http";
 import { canSeeCard, orgMembers } from "@/lib/org";
+import { limit } from "@/lib/ratelimit";
 import { store } from "@/lib/store";
 import type { StoredCard, User } from "@/lib/types";
 
@@ -31,6 +32,8 @@ export const GET = route<Ctx>(async (req, { params }) => {
   }
   let note: string | null = null;
   if (aiConfigured()) {
+    // Only a fresh note costs a model call.
+    limit(`for-me:${me.id}`, 60, 60 * 60_000);
     note = await personalNote(card.explanation, me).catch(() => null);
     if (note) await store.set("notes", noteId, { text: note, ...keys } satisfies Note);
   }

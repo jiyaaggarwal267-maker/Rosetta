@@ -180,14 +180,20 @@ const confidenceOf = (score: number): Verification["confidence"] => (score >= 85
 
 export type Judged = { score: number; issues: string[] };
 
+/**
+ * Low scores need an engineer's read, and so does anything no second model
+ * scored: the rules alone can't vouch for it, so its number isn't a real score.
+ */
+export const needsReview = (v: Pick<Verification, "score" | "checkedBy">) => v.checkedBy === "code" || v.score < RETRY_BELOW;
+
 /** The same explanation of the same diff always gets the same score, and costs one model call ever. */
-export async function judgeCached(e: Explanation, input: { message: string; diff: string }): Promise<Judged | null> {
+export async function judgeCached(e: Explanation, input: { message: string; diff: string; orgId?: string }): Promise<Judged | null> {
   const { verification: _v, evidence: _e, ...content } = e;
   const id = createHash("sha256").update(JSON.stringify([content, input.message, input.diff])).digest("hex").slice(0, 32);
   const hit = await store.get<Judged>("checks", id).catch(() => null);
   if (hit) return hit;
   try {
-    const judged = await judgeExplanation({ message: input.message, diff: input.diff, explanation: e });
+    const judged = await judgeExplanation({ message: input.message, diff: input.diff, explanation: e, orgId: input.orgId });
     await store.set("checks", id, judged).catch(() => {});
     return judged;
   } catch {
@@ -198,7 +204,7 @@ export async function judgeCached(e: Explanation, input: { message: string; diff
 
 export async function verify(
   e: Explanation,
-  input: { message: string; diff: string; files: RawFile[] },
+  input: { message: string; diff: string; files: RawFile[]; orgId?: string },
   opts: { useAi: boolean },
 ): Promise<Omit<Verification, "retried" | "needsReview">> {
   const code = codeChecks(e, input);
@@ -211,7 +217,8 @@ export async function verify(
   const penalty = Math.min(30, code.length * 8);
 
   const judged = opts.useAi ? await judgeCached(e, input) : null;
-  // Without a second model, code checks alone can't vouch for high confidence.
+  // Without a second model, code checks alone can't vouch for high confidence,
+  // and the result is marked unscored (checkedBy "code") so it's flagged for review.
   const score = judged ? Math.max(0, judged.score - penalty) : Math.max(0, 84 - penalty);
   return {
     score,

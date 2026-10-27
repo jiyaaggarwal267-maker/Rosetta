@@ -8,8 +8,9 @@ import { toast } from "sonner";
 import * as api from "@/lib/api";
 import { applyEdits, hasEdits } from "@/lib/edits";
 import type { LevelKey } from "@/lib/levels";
-import { isLead, isTechnical, roleLabel, roleNoun, ROLES } from "@/lib/roles";
-import { useSession } from "@/lib/session";
+import { errorText } from "@/lib/errors";
+import { isLead, isTechnical, roleLabel, roleNoun, ROLES, tabsFor } from "@/lib/roles";
+import { EDITS_PREFIX, useSession } from "@/lib/session";
 import type { CardEdits, CardView as CardData, CommentView, EditableField } from "@/lib/types";
 import { langFor } from "@/lib/lang";
 import { cn, firstName, timeAgo } from "@/lib/utils";
@@ -27,6 +28,50 @@ import { RiskBadge } from "./risk-badge";
 import { StoryCard } from "./story-card";
 
 type State = { status: "loading" } | { status: "error"; code: string } | { status: "ready"; card: CardData };
+
+/** "Back to my work", "Back to team activity": the reader's home tab. */
+function BackLink({ className }: { className: string }) {
+  const { user } = useSession();
+  const home = user ? tabsFor(user.role)[0].label.toLowerCase() : "your work";
+  return (
+    <Link href="/app" className={className}>
+      Back to {home}
+    </Link>
+  );
+}
+
+/* Unsaved fixes survive a reload or a wrong click: kept per card until approved or discarded. */
+const draftKey = (id: string) => `${EDITS_PREFIX}${id}`;
+/**
+ * A fingerprint of the text the fixes were made on. If the card was explained
+ * again since (on another device, say), the old fixes are dropped rather than
+ * pasted over the new text.
+ */
+const baseOf = (card: CardData) => {
+  const text = JSON.stringify([card.explanation.title, card.explanation.levels]);
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = (h * 33) ^ text.charCodeAt(i);
+  return (h >>> 0).toString(36);
+};
+const readDraft = (card: CardData): CardEdits => {
+  try {
+    const raw = localStorage.getItem(draftKey(card.id));
+    const saved = raw ? (JSON.parse(raw) as { base?: string; edits?: CardEdits }) : null;
+    if (saved?.base === baseOf(card) && saved.edits) return saved.edits;
+    if (raw) localStorage.removeItem(draftKey(card.id));
+    return {};
+  } catch {
+    return {};
+  }
+};
+const writeDraft = (card: CardData, edits: CardEdits) => {
+  try {
+    if (hasEdits(edits)) localStorage.setItem(draftKey(card.id), JSON.stringify({ base: baseOf(card), edits }));
+    else localStorage.removeItem(draftKey(card.id));
+  } catch {
+    /* storage unavailable: fixes last for this page only */
+  }
+};
 
 export function CardView({ id }: { id: string }) {
   const [state, setState] = useState<State>({ status: "loading" });
@@ -52,15 +97,15 @@ export function CardView({ id }: { id: string }) {
         </p>
       ) : (
         <div className="grid max-w-(--w-read) justify-items-start gap-6">
-          <h1 className="t-title text-fg-1">{state.code === "not_found" ? "This change isn't on your list." : "This change can't be opened right now."}</h1>
+          <h1 className="t-title text-fg-1">
+            {state.code === "not_found" || state.code === "forbidden" ? "This change isn't on your list." : "This change can't be opened right now."}
+          </h1>
           <p className="t-body text-fg-2">
-            {state.code === "not_found"
+            {state.code === "not_found" || state.code === "forbidden"
               ? "It may belong to another team, or it was never explained in your workspace."
-              : "Rosetta can't reach its server. Try again in a minute."}
+              : "Rosetta can't be reached right now. Try again in a minute."}
           </p>
-          <Link href="/app" className={buttonStyles({ variant: "primary" })}>
-            Back to your work
-          </Link>
+          <BackLink className={buttonStyles({ variant: "primary" })} />
         </div>
       )}
     </main>
@@ -70,7 +115,16 @@ export function CardView({ id }: { id: string }) {
 function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (card: CardData) => void }) {
   const { user } = useSession();
   const router = useRouter();
-  const [edits, setEdits] = useState<CardEdits>({});
+  const [edits, setEditsState] = useState<CardEdits>(() => (card.status === "draft" && card.viewer.canReview ? readDraft(card) : {}));
+  const setEdits = useCallback(
+    (next: CardEdits | ((e: CardEdits) => CardEdits)) =>
+      setEditsState((e) => {
+        const value = typeof next === "function" ? next(e) : next;
+        writeDraft(card, value);
+        return value;
+      }),
+    [card],
+  );
   const [approving, setApproving] = useState(false);
   const [reexplaining, setReexplaining] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -80,11 +134,26 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
   // The reading level is the viewer's role: a manager always reads the manager version.
   // Only the author, while reviewing, can preview what everyone else will read.
   const [preview, setPreview] = useState<LevelKey | null>(null);
-  const levelKey = card.viewer.canReview && preview ? preview : card.viewer.level;
+  // Non-technical readers are sent only their own level, so never assume the others exist.
+  const available = ROLES.filter((r) => card.explanation.levels[r.key]);
+  const wanted = card.viewer.canReview && preview ? preview : card.viewer.level;
+  const levelKey = card.explanation.levels[wanted] ? wanted : (available.find((r) => r.key === card.viewer.level) ?? available[0])?.key ?? wanted;
   const reviewing = card.status === "draft" && card.viewer.canReview;
   const explanation = applyEdits(card.explanation, edits);
   const level = explanation.levels[levelKey];
   const closeAsk = useCallback(() => setAsk((a) => ({ ...a, open: false })), []);
+  const unsaved = reviewing && hasEdits(edits);
+
+  // Leaving with unsaved fixes asks first (they're also kept in this browser).
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +170,15 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
     setEdits((e) => ({ ...e, levels: { ...e.levels, [levelKey]: { ...e.levels?.[levelKey], [field]: value } } }));
 
   const onReexplain = async () => {
+    const resets = [
+      "Explain this change again from the latest code?",
+      "",
+      "The current explanation is replaced",
+      card.status === "approved" ? `, it goes back to "not reviewed" until ${card.viewer.canReview ? "you review" : `${firstName(authorName)} reviews`} it again` : "",
+      unsaved ? ", and your unsaved fixes are discarded" : "",
+      ".",
+    ].join("");
+    if (!window.confirm(resets)) return;
     setReexplaining(true);
     try {
       const { card: fresh } = await api.reexplain(card.id);
@@ -108,7 +186,7 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
       onCardChange({ ...fresh, comments });
       toast("Explained again from the latest code.");
     } catch (e) {
-      toast(e instanceof api.ApiError && e.detail ? e.detail : "That didn't work. Try again in a minute.");
+      toast(errorText(e, "That didn't work. Try again in a minute."));
     } finally {
       setReexplaining(false);
     }
@@ -122,7 +200,7 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
       onCardChange({ ...approved, comments });
       toast("Marked as reviewed. Your manager sees it as checked by you.");
     } catch (e) {
-      toast(e instanceof api.ApiError && e.detail ? e.detail : "That didn't save. Try again in a minute.");
+      toast(errorText(e, "That didn't save. Your fixes are kept here, so try again in a minute."));
     } finally {
       setApproving(false);
     }
@@ -134,9 +212,7 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
   return (
     <div>
       <main id="main" tabIndex={-1} className={cn("mx-auto max-w-(--w-app) px-(--gutter) pt-10", reviewing ? "pb-40" : "pb-24")}>
-        <Link href="/app" className="t-small text-fg-3 hover:text-fg-1">
-          Back to your work
-        </Link>
+        <BackLink className="t-small text-fg-3 hover:text-fg-1" />
 
         <header className="mt-4 flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
           <div className="min-w-0 flex-1 basis-[28rem]">
@@ -210,18 +286,17 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
           </div>
         </div>
 
-        {card.viewer.canReview && (
+        {card.viewer.canReview && available.length > 1 && (
           <div className="mt-4 grid gap-2">
             <p id="preview-label" className="t-small text-fg-2">
               Check every version before your team reads it:
             </p>
-            <div role="tablist" aria-labelledby="preview-label" className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
-              {ROLES.map((r) => (
+            <div role="group" aria-labelledby="preview-label" className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+              {available.map((r) => (
                 <button
                   key={r.key}
-                  role="tab"
                   type="button"
-                  aria-selected={levelKey === r.key}
+                  aria-pressed={levelKey === r.key}
                   onClick={() => setPreview(r.key === card.viewer.level ? null : r.key)}
                   className={cn(
                     "press h-8 shrink-0 rounded-xs px-3 t-small font-medium pointer-coarse:h-11",
@@ -238,29 +313,37 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
 
         <div className="mt-4 grid items-stretch gap-6 card:grid-cols-12">
           <div className="card:col-span-7">
-            <StoryCard
-              level={level}
-              levelLabel={roleLabel(levelKey)}
-              fileCount={card.files.length}
-              editable={reviewing}
-              onEdit={editField}
-              note={note && user ? { name: firstName(user.name), text: note } : undefined}
-            />
+            {level ? (
+              <StoryCard
+                level={level}
+                levelLabel={roleLabel(levelKey)}
+                fileCount={card.files.length}
+                editable={reviewing}
+                onEdit={editField}
+                note={note && user ? { name: firstName(user.name), text: note } : undefined}
+              />
+            ) : (
+              <p className="rounded-md bg-surface-1 p-6 t-body text-fg-2 shadow-elev-1 sm:p-8">
+                This change hasn&rsquo;t been explained for you yet. Try again in a minute.
+              </p>
+            )}
           </div>
           <div className="card:col-span-5">
             <Comments card={card} comments={comments} onAdd={(c) => setComments((all) => [...all, c])} />
           </div>
         </div>
 
-        <div className="mt-6">
-          <HowItWorks
-            explanation={explanation}
-            level={level}
-            onAsk={(target) => setAsk({ open: true, target })}
-            askLabel={card.viewer.canAsk ? "Ask why" : "See the code behind"}
-            askHint={card.viewer.canAsk ? "Select any box to ask why or see the code behind it." : "Select any box to see the code behind it."}
-          />
-        </div>
+        {level && (
+          <div className="mt-6">
+            <HowItWorks
+              explanation={explanation}
+              level={level}
+              onAsk={(target) => setAsk({ open: true, target })}
+              askLabel={card.viewer.canAsk ? "Ask why" : "See the code behind"}
+              askHint={card.viewer.canAsk ? "Select any box to ask why or see the code behind it." : "Select any box to see the code behind it."}
+            />
+          </div>
+        )}
 
         {card.viewer.canAsk && card.authorPerson && (
           <div className="mt-4 grid justify-items-start">
@@ -275,12 +358,14 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
         <div className="mt-16 flex flex-wrap items-end justify-between gap-4">
           <FilesList files={card.files} className="min-w-0 flex-1" />
         </div>
-        <a href={card.url} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-2 t-small text-fg-2 hover:text-fg-1">
-          <GitHubIcon size={14} />
-          <span className="font-mono">
-            {card.repo} · {shortRef}
-          </span>
-        </a>
+        {card.viewer.level !== "client" && (
+          <a href={card.url} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-2 t-small text-fg-2 hover:text-fg-1">
+            <GitHubIcon size={14} />
+            <span className="font-mono">
+              {card.repo} · {shortRef}
+            </span>
+          </a>
+        )}
       </main>
 
       <AnimatePresence>
@@ -298,7 +383,7 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
                 <span className="font-semibold">Your change</span>
                 <span className="text-fg-2">
                   {" "}
-                  · {hasEdits(edits) ? "Your fixes are kept until you mark it reviewed." : "Check it reads right, then mark it reviewed."}
+                  · {unsaved ? "Your fixes are saved in this browser until you mark it reviewed." : "Check it reads right, then mark it reviewed."}
                 </span>
               </p>
               <Button variant="primary" loading={approving} onClick={onApprove}>
@@ -309,7 +394,7 @@ function LoadedCard({ card, onCardChange }: { card: CardData; onCardChange: (car
         )}
       </AnimatePresence>
 
-      <AskWhy card={{ ...card, explanation }} levelKey={levelKey} target={ask.target} open={ask.open} onClose={closeAsk} />
+      {level && <AskWhy card={{ ...card, explanation }} levelKey={levelKey} target={ask.target} open={ask.open} onClose={closeAsk} />}
     </div>
   );
 }

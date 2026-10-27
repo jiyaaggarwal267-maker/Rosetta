@@ -1,5 +1,5 @@
 import { LEVELS, type LevelKey } from "../levels";
-import type { Card, Explanation, FileChange, FlowGraph, LevelText } from "../types";
+import type { Card, FileChange, FlowGraph, FullExplanation as Explanation, LevelText } from "../types";
 
 /**
  * The three demo commits, written by hand. They back the home page demo,
@@ -479,7 +479,7 @@ export type Sample = {
   findings: string[];
   /** Offline Ask Why answers per node key: technical readers and everyone else. */
   notes: Record<string, { tech: string; plain: string }>;
-  card: Omit<Card, "committedAt" | "status" | "approvedBy">;
+  card: Omit<Card, "committedAt" | "status" | "approvedBy" | "explanation"> & { explanation: Explanation };
 };
 
 const AUTHOR = { name: "Arjun Mehta", login: "arjun-mehta" };

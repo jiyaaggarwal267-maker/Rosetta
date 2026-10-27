@@ -7,22 +7,29 @@ export function changedNodeIds(before: FlowGraph | null, after: FlowGraph) {
   return new Set(after.nodes.filter((n) => !beforeKeys.has(n.key)).map((n) => n.id));
 }
 
+/** Words Mermaid reads as syntax. Cards saved before the server renamed them still use them as ids. */
+const MERMAID_WORDS = new Set(["end", "graph", "flowchart", "subgraph", "style", "class", "classdef", "click", "linkstyle", "direction", "default", "call", "href", "callback"]);
+
+/** The id a node or group gets in the Mermaid text. */
+export const mermaidId = (id: string) => (MERMAID_WORDS.has(id.toLowerCase()) ? `${id}Node` : id);
+
 const esc = (text: string) =>
   text.replace(/"/g, "#quot;").replace(/</g, "#lt;").replace(/>/g, "#gt;").replace(/`/g, "'").replace(/\|/g, "/");
 
 /** Shape by kind: start/end pill, decision diamond, data cylinder, step box. */
 function nodeLine(node: FlowNode, label: string) {
   const l = `"${esc(label)}"`;
+  const id = mermaidId(node.id);
   switch (node.kind) {
     case "start":
     case "end":
-      return `${node.id}([${l}])`;
+      return `${id}([${l}])`;
     case "decision":
-      return `${node.id}{${l}}`;
+      return `${id}{${l}}`;
     case "data":
-      return `${node.id}[(${l})]`;
+      return `${id}[(${l})]`;
     default:
-      return `${node.id}[${l}]`;
+      return `${id}[${l}]`;
   }
 }
 
@@ -35,7 +42,7 @@ export function toMermaid(graph: FlowGraph, labels: Record<string, string>, chan
   for (const group of graph.groups ?? []) {
     const members = graph.nodes.filter((n) => n.group === group.id);
     if (!members.length) continue;
-    lines.push(`  subgraph ${group.id}["${esc(label(group.key))}"]`);
+    lines.push(`  subgraph ${mermaidId(group.id)}["${esc(label(group.key))}"]`);
     lines.push(`    direction ${direction === "LR" ? "TB" : "LR"}`);
     for (const n of members) {
       lines.push(`    ${nodeLine(n, label(n.key))}`);
@@ -46,9 +53,10 @@ export function toMermaid(graph: FlowGraph, labels: Record<string, string>, chan
   for (const n of graph.nodes) if (!grouped.has(n.id)) lines.push(`  ${nodeLine(n, label(n.key))}`);
 
   for (const [from, to, labelKey] of graph.edges) {
-    lines.push(labelKey ? `  ${from} -->|"${esc(label(labelKey))}"| ${to}` : `  ${from} --> ${to}`);
+    const [a, b] = [mermaidId(from), mermaidId(to)];
+    lines.push(labelKey ? `  ${a} -->|"${esc(label(labelKey))}"| ${b}` : `  ${a} --> ${b}`);
   }
-  const changedIds = graph.nodes.filter((n) => changed.has(n.id)).map((n) => n.id);
+  const changedIds = graph.nodes.filter((n) => changed.has(n.id)).map((n) => mermaidId(n.id));
   if (changedIds.length) lines.push(`  class ${changedIds.join(",")} changed`);
   return lines.join("\n");
 }

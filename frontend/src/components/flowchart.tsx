@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { Mermaid } from "mermaid";
-import { changedNodeIds, nextNodes, orderedNodes, pathEdges, toMermaid } from "@/lib/flow";
+import { changedNodeIds, mermaidId, nextNodes, orderedNodes, pathEdges, toMermaid } from "@/lib/flow";
 import type { Explanation, FlowGraph, LevelText } from "@/lib/types";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
@@ -171,9 +171,11 @@ export function FlowDiagram({ graph, labels, changed, panel, trace, onAsk, askLa
 
 /** Tags nodes and edges with our ids, and makes nodes buttons when asking is on. */
 function decorate(root: HTMLElement, graph: FlowGraph, labels: Record<string, string>, askLabel: string | null) {
+  // Mermaid ids back to ours (they differ only for reserved words).
+  const ours = (id: string) => graph.nodes.find((n) => mermaidId(n.id) === id)?.id ?? id;
   root.querySelectorAll<SVGGElement>("g.node").forEach((g) => {
     const id = g.dataset.id ?? g.id.match(/flowchart-(.+)-\d+$/)?.[1];
-    const node = graph.nodes.find((n) => n.id === id);
+    const node = graph.nodes.find((n) => mermaidId(n.id) === id);
     if (!node) return;
     g.dataset.node = node.id;
     g.dataset.key = node.key;
@@ -189,8 +191,8 @@ function decorate(root: HTMLElement, graph: FlowGraph, labels: Record<string, st
     const [, from, to] = (el.dataset.id ?? "").split("_");
     if (!from || !to) return;
     const target = el.closest("g.edgeLabel") ?? el;
-    (target as SVGElement).dataset.edgeFrom = from;
-    (target as SVGElement).dataset.edgeTo = to;
+    (target as SVGElement).dataset.edgeFrom = ours(from);
+    (target as SVGElement).dataset.edgeTo = ours(to);
   });
 }
 
@@ -231,13 +233,12 @@ export function HowItWorks({ explanation, level, onAsk, askLabel, askHint = "Sel
           </p>
         </div>
         {before ? (
-          <div role="tablist" aria-label="Before or after" className="inline-grid grid-cols-2 rounded-sm bg-surface-2 p-1 shadow-ring">
+          <div role="group" aria-label="Show the flow before or after this change" className="inline-grid grid-cols-2 rounded-sm bg-surface-2 p-1 shadow-ring">
             {(["before", "after"] as const).map((p) => (
               <button
                 key={p}
-                role="tab"
                 type="button"
-                aria-selected={panel === p}
+                aria-pressed={panel === p}
                 onClick={() => {
                   setPanel(p);
                   setStep(null);

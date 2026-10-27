@@ -23,6 +23,8 @@ export type JsonTask<T> = {
   prefer?: "gemini" | "fallback";
   /** A shorter prompt for the fallback model, whose per-minute token budget is small. */
   fallbackPrompt?: string;
+  /** The workspace the call is for: it counts toward that workspace's share of the daily quota. */
+  orgId?: string;
 };
 
 export const aiConfigured = () => Boolean(env.geminiKey || env.fallbackKey);
@@ -106,14 +108,23 @@ async function openAiCompatibleOnce(task: JsonTask<unknown>): Promise<unknown> {
 }
 
 /**
+ * Whether a failed call used up quota: an answer we couldn't use, or a
+ * timeout (the provider may have finished it anyway), counts; a refusal
+ * (any HTTP error, 429 included) or a network failure never reached the
+ * model and doesn't.
+ */
+const billed = (message: string) => !/^(Gemini|Fallback) \d{3}:/.test(message) && !/fetch failed|ECONNREFUSED|ENOTFOUND|ECONNRESET|EAI_AGAIN/i.test(message);
+
+/**
  * Runs a task on the best available model. Big jobs (explaining a commit)
  * prefer Gemini; small ones prefer the fallback so Gemini's small free daily
- * quota is kept for explanations. A provider that's used up today is skipped.
+ * quota is kept for explanations. A provider that's used up today, overall or
+ * for this workspace, is skipped.
  */
 export async function generateJson<T>(task: JsonTask<T>): Promise<T> {
-  const { recordAi, spent } = await import("../usage");
-  const geminiOk = Boolean(env.geminiKey) && !(await spent("gemini"));
-  const fallbackOk = Boolean(env.fallbackKey) && !(await spent("fallback"));
+  const { recordAi, sharedSpent, spent } = await import("../usage");
+  const geminiOk = Boolean(env.geminiKey) && !(await spent("gemini", task.orgId));
+  const fallbackOk = Boolean(env.fallbackKey) && !(await spent("fallback", task.orgId));
 
   const geminiAttempts: Attempt[] = geminiOk
     ? [
@@ -132,18 +143,24 @@ export async function generateJson<T>(task: JsonTask<T>): Promise<T> {
     if (label === "gemini retry" && skipRetry) continue;
     try {
       const result = task.parse(await run());
-      void recordAi(provider, task.name, "ok");
+      void recordAi(provider, task.name, "ok", task.orgId);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const limited = /\b429\b/.test(message);
       if (limited || /timeout|aborted|\b503\b/i.test(message)) skipRetry = true;
       // Only a daily limit switches the provider off for the day; a per-minute one passes.
-      void recordAi(provider, task.name, limited && isDailyQuota(message) ? "exhausted" : "failed");
+      void recordAi(provider, task.name, limited && isDailyQuota(message) ? "exhausted" : billed(message) ? "failed" : "error", task.orgId);
       console.warn(`[rosetta] ${task.name}: ${label} failed:`, message.slice(0, 200));
     }
   }
-  throw new ApiError("unavailable", geminiOk || fallbackOk ? undefined : "Today's free AI quota is used up. It resets tomorrow.");
+  if (geminiOk || fallbackOk) throw new ApiError("unavailable");
+  // Say whose quota ran out: everyone's, or only this workspace's share.
+  const shared = (!env.geminiKey || (await sharedSpent("gemini"))) && (!env.fallbackKey || (await sharedSpent("fallback")));
+  throw new ApiError(
+    "unavailable",
+    shared || !task.orgId ? "Today's free AI quota is used up. It resets tomorrow." : "Your workspace has used its share of today's free AI quota. It resets tomorrow.",
+  );
 }
 
 type Attempt = [label: string, provider: "gemini" | "fallback", run: () => Promise<unknown>];

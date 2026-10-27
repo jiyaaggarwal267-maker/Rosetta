@@ -3,13 +3,16 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import * as api from "@/lib/api";
-import { isLead, roleLabel, ROLES } from "@/lib/roles";
+import { errorText } from "@/lib/errors";
+import { githubReason, useGithubReturn } from "@/lib/github-app";
+import { canOpen, isLead, roleLabel, ROLES } from "@/lib/roles";
 import { useSession } from "@/lib/session";
-import type { AiUsage, Member, Role, TeamView } from "@/lib/types";
+import type { AiUsage, GithubStatus, Member, Role, TeamView } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
-import { Page } from "./app-shell";
+import { LoadError, NotForRole, Page } from "./app-shell";
 import { Button } from "./button";
 import { ComposeQuestion } from "./compose-question";
+import { ConnectGithub, GithubConnected, GithubStatusPanel, UnassignedPanel, useGithubStatus, VerifiedMark } from "./github";
 import { ManageMember } from "./manage-member";
 import { Field, inputClass } from "./form";
 import { Avatar, SampleTag } from "./person";
@@ -31,11 +34,38 @@ export function Team() {
   const [team, setTeam] = useState<TeamView | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
   const [managing, setManaging] = useState<Member | null>(null);
-  const load = () => api.getTeam().then(setTeam).catch(() => {});
+  const [failed, setFailed] = useState(false);
+  const allowed = user ? canOpen(user.role, "/app/team") : false;
+  const load = () =>
+    api
+      .getTeam()
+      .then((t) => {
+        setTeam(t);
+        setFailed(false);
+      })
+      .catch(() => setFailed(true));
   useEffect(() => {
+    if (allowed) load();
+  }, [allowed]);
+  // Only leads open this page; the GitHub status refreshes every 30 s while it's visible.
+  const github = useGithubStatus(allowed, true);
+  const refresh = () => {
     load();
-  }, []);
+    github.reload();
+  };
+  // GitHub sends the owner back here after connecting.
+  useGithubReturn(({ ok, reason }) => {
+    toast(ok ? "GitHub connected. Choose the repositories Rosetta should watch." : githubReason(reason, "connect"));
+    if (ok) refresh();
+  });
 
+  if (user && !allowed) return <NotForRole title="Team" />;
+  if (failed && !team)
+    return (
+      <Page title="Team">
+        <LoadError message="Your team can't load right now." onRetry={load} />
+      </Page>
+    );
   if (!user || !team) return <Page title="Team">{<p className="t-body text-fg-3">Loading…</p>}</Page>;
   const cmo = user.role === "cmo";
   const lead = isLead(user.role);
@@ -85,7 +115,7 @@ export function Team() {
         <aside className="grid min-w-0 grid-cols-1 gap-6 card:col-span-5">
           {team.isOwner && <WorkspaceName />}
           {team.canAdd.length > 0 && <AddMember team={team} onAdded={load} />}
-          {lead && <Repositories team={team} onSaved={load} />}
+          {lead && <GithubArea team={team} status={github.status} failed={github.failed} onRetry={github.reload} onChanged={refresh} />}
           {lead && <AiQuota />}
         </aside>
       </div>
@@ -117,7 +147,13 @@ function MemberRow({ member, onAsk, onManage }: { member: Member; onAsk: () => v
         <p className="truncate t-micro text-fg-3">
           <span className="font-medium text-fg-2">{roleLabel(member.role)}</span>
           {member.title && member.title !== roleLabel(member.role) && ` · ${member.title}`}
-          {member.githubLogin && <span className="font-mono"> · @{member.githubLogin}</span>}
+          {member.githubLogin && (
+            <span className="font-mono">
+              {" "}
+              · @{member.githubLogin}
+              {member.githubVerified && <VerifiedMark className="ml-1 align-[-2px]" />}
+            </span>
+          )}
           {member.email && ` · ${member.email}`}
         </p>
       </div>
@@ -160,6 +196,8 @@ function AddMember({ team, onAdded }: { team: TeamView; onAdded: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [invite, setInvite] = useState<{ name: string; code: string; email: string; emailed: boolean } | null>(null);
   const technical = role === "engineer" || role === "senior" || role === "intern";
+  // A client always reports to a manager, whose team's work they see.
+  const needsManager = role === "client" && team.me.role !== "manager";
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -238,11 +276,20 @@ function AddMember({ team, onAdded }: { team: TeamView; onAdded: () => void }) {
           />
         )}
         {role === "manager" && <Field label="Team name" name="member-team" optional placeholder="Payments" value={teamName} onChange={(e) => setTeamName(e.target.value)} />}
+        {needsManager && managers.length === 0 && (
+          <p className="t-small text-fg-2">Add a manager first. A client follows their manager's team.</p>
+        )}
         {role !== "manager" && managers.length > 0 && (
           <label className="grid gap-2">
             <span className="t-small font-medium text-fg-1">Reports to</span>
-            <select value={managerId} onChange={(e) => setManagerId(e.target.value)} className={inputClass}>
-              <option value="">You</option>
+            <select value={managerId} onChange={(e) => setManagerId(e.target.value)} className={inputClass} required={needsManager}>
+              {needsManager ? (
+                <option value="" disabled>
+                  Choose a manager
+                </option>
+              ) : (
+                <option value="">You</option>
+              )}
               {managers.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
@@ -253,11 +300,11 @@ function AddMember({ team, onAdded }: { team: TeamView; onAdded: () => void }) {
           </label>
         )}
         {error && (
-          <p role="alert" className="t-small font-medium whitespace-pre-line text-fg-1">
+          <p role="alert" className="t-small font-medium whitespace-pre-line text-danger">
             {error}
           </p>
         )}
-        <Button type="submit" variant="primary" loading={busy} className="justify-self-start">
+        <Button type="submit" variant="primary" loading={busy} disabled={needsManager && !managerId} className="justify-self-start">
           Add and create invite
         </Button>
       </form>
@@ -265,7 +312,70 @@ function AddMember({ team, onAdded }: { team: TeamView; onAdded: () => void }) {
   );
 }
 
-function Repositories({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
+/**
+ * With Rosetta's GitHub app on this server: connect once, pick repositories,
+ * see the queue. Without it: the older owner/repo box and webhook steps.
+ */
+function GithubArea({
+  team,
+  status,
+  failed,
+  onRetry,
+  onChanged,
+}: {
+  team: TeamView;
+  status: GithubStatus | null;
+  failed: boolean;
+  onRetry: () => void;
+  onChanged: () => void;
+}) {
+  if (!status)
+    return (
+      <section aria-labelledby="github-heading" className="rounded-md bg-surface-1 p-6 shadow-elev-1">
+        <h2 id="github-heading" className="t-heading text-fg-1">
+          GitHub
+        </h2>
+        {failed ? (
+          <div className="mt-3 grid justify-items-start gap-3">
+            <p role="alert" className="t-small font-medium text-danger">
+              GitHub settings can&rsquo;t load right now.
+            </p>
+            <Button onClick={onRetry}>Try again</Button>
+          </div>
+        ) : (
+          <p className="mt-3 t-small text-fg-3" role="status">
+            Loading…
+          </p>
+        )}
+      </section>
+    );
+  if (!status.app.configured && !status.connected) return <Repositories team={team} onSaved={onChanged} />;
+  const unmatched = status.queue.unassigned > 0;
+  if (!status.connected)
+    return (
+      <>
+        <ConnectGithub isOwner={team.isOwner} />
+        {(team.isOwner || team.org.repos.length > 0) && (
+          <details className="rounded-md bg-surface-1 p-6 shadow-elev-1">
+            <summary className="cursor-pointer t-small font-medium text-fg-1">Or watch public repositories by name</summary>
+            <div className="mt-4">
+              <Repositories team={team} onSaved={onChanged} embedded />
+            </div>
+          </details>
+        )}
+        {unmatched && <UnassignedPanel onAssigned={onChanged} />}
+      </>
+    );
+  return (
+    <>
+      <GithubConnected team={team} status={status} onChanged={onChanged} />
+      <GithubStatusPanel status={status} />
+      <UnassignedPanel onAssigned={onChanged} />
+    </>
+  );
+}
+
+function Repositories({ team, onSaved, embedded = false }: { team: TeamView; onSaved: () => void; embedded?: boolean }) {
   const [repo, setRepo] = useState("");
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -288,10 +398,10 @@ function Repositories({ team, onSaved }: { team: TeamView; onSaved: () => void }
     setSyncing(true);
     try {
       const r = await api.syncNow();
-      toast(r.commits || r.comments ? `Found ${r.commits} new changes and ${r.comments} comments.` : "Everything is up to date.");
+      toast(r.commits || r.comments ? `Queued ${r.commits} new changes and found ${r.comments} comments.` : "Everything is up to date.");
       onSaved();
     } catch (e) {
-      toast(e instanceof api.ApiError && e.detail ? e.detail : "Sync didn't work. Is GITHUB_TOKEN set on the server?");
+      toast(errorText(e, "Couldn't check GitHub right now. Make sure the repositories are public and spelled owner/repo, then try again."));
     } finally {
       setSyncing(false);
     }
@@ -300,9 +410,9 @@ function Repositories({ team, onSaved }: { team: TeamView; onSaved: () => void }
   const webhook = team.org.webhookPath ? `${API_BASE}${team.org.webhookPath}` : "";
 
   return (
-    <section className="rounded-md bg-surface-1 p-6 shadow-elev-1">
-      <h2 className="t-heading text-fg-1">Repositories</h2>
-      <p className="mt-1 t-small text-fg-2">
+    <section className={embedded ? undefined : "rounded-md bg-surface-1 p-6 shadow-elev-1"}>
+      {!embedded && <h2 className="t-heading text-fg-1">Repositories</h2>}
+      <p className={cn(!embedded && "mt-1", "t-small text-fg-2")}>
         Rosetta watches these. Every commit by someone on your team is explained and sent to their manager, with no links to paste.
       </p>
 
@@ -310,36 +420,41 @@ function Repositories({ team, onSaved }: { team: TeamView; onSaved: () => void }
         {repos.map((r) => (
           <li key={r} className="flex items-center justify-between gap-2 rounded-sm bg-surface-2 px-3 py-2">
             <span className="truncate font-mono t-small text-fg-1">{r}</span>
-            <Button variant="ghost" className="h-8!" onClick={() => save(repos.filter((x) => x !== r))} disabled={busy}>
-              Remove
-            </Button>
+            {team.isOwner && (
+              <Button variant="ghost" className="h-8!" onClick={() => save(repos.filter((x) => x !== r))} disabled={busy}>
+                Remove
+              </Button>
+            )}
           </li>
         ))}
       </ul>
+      {!team.isOwner && repos.length === 0 && <p className="mt-3 t-small text-fg-3">The workspace owner chooses which repositories to watch.</p>}
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (repo.trim()) void save([...repos, repo.trim()]);
-        }}
-        className="mt-3 flex gap-2"
-      >
-        <label htmlFor="repo" className="sr-only">
-          Repository
-        </label>
-        <input
-          id="repo"
-          value={repo}
-          onChange={(e) => setRepo(e.target.value)}
-          placeholder="owner/repo"
-          className={cn(inputClass, "font-mono")}
-          autoCapitalize="off"
-          spellCheck={false}
-        />
-        <Button type="submit" loading={busy} className="h-11!">
-          Watch
-        </Button>
-      </form>
+      {team.isOwner && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (repo.trim()) void save([...repos, repo.trim()]);
+          }}
+          className="mt-3 flex gap-2"
+        >
+          <label htmlFor="repo" className="sr-only">
+            Repository
+          </label>
+          <input
+            id="repo"
+            value={repo}
+            onChange={(e) => setRepo(e.target.value)}
+            placeholder="owner/repo"
+            className={cn(inputClass, "font-mono")}
+            autoCapitalize="off"
+            spellCheck={false}
+          />
+          <Button type="submit" loading={busy} className="h-11!">
+            Watch
+          </Button>
+        </form>
+      )}
 
       {repos.length > 0 && (
         <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -437,8 +552,8 @@ function AiQuota() {
   }, []);
   if (!usage) return null;
   const rows = [
-    { name: "Explanations (Gemini)", u: usage.gemini },
-    { name: "Everything else (Groq)", u: usage.fallback },
+    { name: "Explaining changes", u: usage.gemini },
+    { name: "Questions, checks and messages", u: usage.fallback },
   ].filter((r) => r.u.configured);
   if (!rows.length) return null;
   const tasks = Object.entries(usage.tasks).sort((a, b) => b[1] - a[1]);
@@ -446,7 +561,7 @@ function AiQuota() {
   return (
     <section className="rounded-md bg-surface-1 p-6 shadow-elev-1">
       <h2 className="t-heading text-fg-1">AI use today</h2>
-      <p className="mt-1 t-small text-fg-2">Free daily limits. They reset at midnight, India time.</p>
+      <p className="mt-1 t-small text-fg-2">Your workspace&rsquo;s daily allowance. It resets every night at midnight (IST).</p>
       <ul className="mt-4 grid gap-4">
         {rows.map(({ name, u }) => {
           const pct = Math.min(100, Math.round((u.used / Math.max(1, u.limit)) * 100));

@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/auth";
 import { json, preflight, route } from "@/lib/http";
-import { descendants, orgMembers, personOf, visibleAuthorIds } from "@/lib/org";
+import { canSeeCard, descendants, orgMembers, personOf, visibleAuthorIds } from "@/lib/org";
 import { store } from "@/lib/store";
 import { after } from "next/server";
 import { backfill, displayFor } from "@/lib/translate";
@@ -33,8 +33,10 @@ export const GET = route(async (req) => {
     store.list<Comment>("comments", "orgId", me.orgId),
     store.list<StoredCard>("cards", "orgId", me.orgId),
   ]);
-  const titles = new Map(cards.map((c) => [c.id, c.explanation.title]));
-  const untranslated = comments.filter((c) => allowed.has(c.authorId) && !c.levels);
+  // Only comments on cards this reader may open (a client never sees drafts).
+  const visibleCards = new Map(cards.filter((c) => canSeeCard(me, c, users)).map((c) => [c.id, c]));
+  const shown = comments.filter((c) => allowed.has(c.authorId) && (!c.cardId || visibleCards.has(c.cardId)));
+  const untranslated = shown.filter((c) => !c.levels);
   if (untranslated.length) {
     after(async () => {
       const nameOf = (uid: string) => users.find((u) => u.id === uid)?.name ?? "An engineer";
@@ -42,8 +44,7 @@ export const GET = route(async (req) => {
     });
   }
 
-  const items = comments
-    .filter((c) => allowed.has(c.authorId))
+  const items = shown
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, 100)
     .map((c) => {
@@ -51,7 +52,7 @@ export const GET = route(async (req) => {
       return {
         id: c.id,
         author: authorUser ? personOf(authorUser, users) : null,
-        card: c.cardId ? { id: c.cardId, title: titles.get(c.cardId) ?? "" } : null,
+        card: c.cardId ? { id: c.cardId, title: visibleCards.get(c.cardId)?.explanation.title ?? "" } : null,
         source: c.source,
         githubUrl: c.githubUrl,
         repo: c.repo,

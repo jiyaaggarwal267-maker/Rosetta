@@ -1,9 +1,9 @@
 import { env } from "./env";
+import { appConfigured, installationToken } from "./github-app";
 import type { ParsedLink } from "./github-url";
 import { ApiError } from "./http";
-import type { CardRef, StoredCard } from "./types";
-
-const API = "https://api.github.com";
+import { store } from "./store";
+import type { CardRef, Org, StoredCard } from "./types";
 
 export type RawFile = {
   filename: string;
@@ -25,6 +25,8 @@ export type Change = {
   author: { name: string; login: string };
   committedAt: string;
   files: RawFile[];
+  /** How many parents a commit has: 2 or more is a merge. Missing for pull requests. */
+  parents?: number;
 };
 
 class GitHubError extends Error {
@@ -33,16 +35,49 @@ class GitHubError extends Error {
   }
 }
 
-async function gh<T>(path: string, init?: RequestInit): Promise<T> {
+/** Which workspace a request is for: its GitHub App installation, when it has one, reads its private repos. */
+type Auth = { orgId?: string };
+
+/** Installation ids by workspace, for a minute, so a sync doesn't read the org before every request. */
+const installations = new Map<string, { id?: string; at: number }>();
+
+/**
+ * The token to read GitHub with for a workspace: its installation's when it
+ * connected the GitHub App, otherwise the server's GITHUB_TOKEN (public repos,
+ * as before). An installation token that can't be had falls back too.
+ */
+async function tokenFor(orgId?: string) {
+  if (!orgId || !appConfigured()) return env.githubToken;
+  let hit = installations.get(orgId);
+  if (!hit || Date.now() - hit.at > 60_000) {
+    const org = await store.get<Org>("orgs", orgId).catch(() => null);
+    hit = { id: org?.githubInstallationId, at: Date.now() };
+    installations.set(orgId, hit);
+    if (installations.size > 2_000) installations.clear();
+  }
+  if (!hit.id) return env.githubToken;
+  try {
+    return await installationToken(hit.id);
+  } catch (error) {
+    console.warn(`[rosetta] no installation token for ${orgId}:`, error instanceof Error ? error.message : error);
+    return env.githubToken;
+  }
+}
+
+/** Forgets the remembered installation, after connecting or disconnecting. */
+export const forgetInstallation = (orgId: string) => installations.delete(orgId);
+
+async function request(path: string, init?: RequestInit, auth: Auth = {}): Promise<Response> {
+  const token = await tokenFor(auth.orgId);
   let res: Response;
   try {
-    res = await fetch(`${API}${path}`, {
+    res = await fetch(`${env.githubApiUrl}${path}`, {
       ...init,
       headers: {
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "rosetta-devlympics",
-        ...(env.githubToken ? { Authorization: `Bearer ${env.githubToken}` } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...init?.headers,
       },
       signal: AbortSignal.timeout(15_000),
@@ -51,13 +86,23 @@ async function gh<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError("network");
   }
   if (!res.ok) throw new GitHubError(res.status);
-  return res.json() as Promise<T>;
+  return res;
 }
 
+/** The repo is gone, renamed or out of reach for good: listing it again won't help. */
+export const repoGone = (error: unknown) => error instanceof GitHubError && [404, 410, 451].includes(error.status);
+
+async function gh<T>(path: string, init?: RequestInit, auth?: Auth): Promise<T> {
+  return (await request(path, init, auth)).json() as Promise<T>;
+}
+
+/** The number of the last page, from GitHub's Link header (1 when there's only one). */
+const lastPage = (res: Response) => Number(/[?&]page=(\d+)[^>]*>; rel="last"/.exec(res.headers.get("link") ?? "")?.[1] ?? 1);
+
 /** A missing commit in a visible repo is "not found"; an invisible repo is private. */
-async function explainMissing(owner: string, repo: string): Promise<never> {
+async function explainMissing(owner: string, repo: string, auth?: Auth): Promise<never> {
   try {
-    await gh(`/repos/${owner}/${repo}`);
+    await gh(`/repos/${owner}/${repo}`, undefined, auth);
   } catch (error) {
     if (error instanceof GitHubError && error.status === 404) throw new ApiError("private");
     throw new ApiError("unavailable");
@@ -65,9 +110,9 @@ async function explainMissing(owner: string, repo: string): Promise<never> {
   throw new ApiError("not_found");
 }
 
-function mapError(error: unknown, link: ParsedLink): Promise<never> {
+function mapError(error: unknown, link: ParsedLink, auth?: Auth): Promise<never> {
   if (error instanceof GitHubError) {
-    if (error.status === 404 || error.status === 422) return explainMissing(link.owner, link.repo);
+    if (error.status === 404 || error.status === 422) return explainMissing(link.owner, link.repo, auth);
     if (error.status === 401 || error.status === 403 || error.status === 429) {
       console.warn(
         `[rosetta] GitHub refused the request (${error.status}).${env.githubToken ? "" : " Set GITHUB_TOKEN: the anonymous limit is 60 requests an hour."}`,
@@ -84,6 +129,7 @@ type CommitResponse = {
   commit: { message: string; author: { name: string; date: string } };
   author: { login: string } | null;
   files?: RawFile[];
+  parents?: { sha: string }[];
 };
 
 type PullResponse = {
@@ -96,12 +142,16 @@ type PullResponse = {
   head: { sha: string };
 };
 
-/** Commit or PR metadata and changed files (FR-1.3). */
-export async function fetchChange(link: ParsedLink): Promise<Change> {
+/**
+ * Commit or PR metadata and changed files (FR-1.3). Pass the workspace so its
+ * GitHub App installation can read private repos.
+ */
+export async function fetchChange(link: ParsedLink, orgId?: string): Promise<Change> {
   const repo = `${link.owner}/${link.repo}`;
+  const auth: Auth = { orgId };
   try {
     if (link.kind === "commit") {
-      const c = await gh<CommitResponse>(`/repos/${repo}/commits/${link.sha}`);
+      const c = await gh<CommitResponse>(`/repos/${repo}/commits/${link.sha}`, undefined, auth);
       return {
         repo,
         ref: { kind: "commit", sha: c.sha },
@@ -112,14 +162,15 @@ export async function fetchChange(link: ParsedLink): Promise<Change> {
         author: { name: c.commit.author.name, login: c.author?.login ?? "" },
         committedAt: c.commit.author.date,
         files: c.files ?? [],
+        parents: c.parents?.length,
       };
     }
 
     const [pr, files] = await Promise.all([
-      gh<PullResponse>(`/repos/${repo}/pulls/${link.number}`),
-      gh<RawFile[]>(`/repos/${repo}/pulls/${link.number}/files?per_page=100`),
+      gh<PullResponse>(`/repos/${repo}/pulls/${link.number}`, undefined, auth),
+      gh<RawFile[]>(`/repos/${repo}/pulls/${link.number}/files?per_page=100`, undefined, auth),
     ]);
-    const profile = await gh<{ name: string | null }>(`/users/${pr.user.login}`).catch(() => null);
+    const profile = await gh<{ name: string | null }>(`/users/${pr.user.login}`, undefined, auth).catch(() => null);
     return {
       repo,
       ref: { kind: "pull", number: link.number },
@@ -132,7 +183,7 @@ export async function fetchChange(link: ParsedLink): Promise<Change> {
       files,
     };
   } catch (error) {
-    return mapError(error, link);
+    return mapError(error, link, auth);
   }
 }
 
@@ -147,7 +198,7 @@ export async function filesFor(card: StoredCard): Promise<RawFile[]> {
     card.ref.kind === "commit"
       ? { owner, repo, kind: "commit", sha: card.ref.sha }
       : { owner, repo, kind: "pull", number: card.ref.number };
-  const { files } = await fetchChange(link);
+  const { files } = await fetchChange(link, card.orgId);
   diffCache.set(card.id, { at: Date.now(), files });
   return files;
 }
@@ -157,26 +208,86 @@ type GhComment = {
   body: string;
   html_url: string;
   created_at: string;
+  updated_at?: string;
   user: { login: string } | null;
   commit_id?: string;
 };
 
-/** Commits by one GitHub user in one repo since a date (newest first). */
-export async function listAuthorCommits(repo: string, login: string, sinceIso: string) {
-  const commits = await gh<{ sha: string }[]>(
-    `/repos/${repo}/commits?author=${encodeURIComponent(login)}&since=${encodeURIComponent(sinceIso)}&per_page=10`,
-  );
-  return commits.map((c) => c.sha);
+/** Pages read per listing; past this a listing reports itself incomplete. */
+const MAX_PAGES = 5;
+const PER_PAGE = 100;
+
+/**
+ * Commits by one GitHub user in one repo since a date (newest first), with
+ * their committer dates. `complete` is false when there were more than we read;
+ * then `resumeAt` is the oldest date read, and anything older is given up on, so
+ * a very busy author can't hold sync back for ever.
+ */
+export async function listAuthorCommits(repo: string, login: string, sinceIso: string, orgId?: string) {
+  const commits: { sha: string; date: string }[] = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const batch = await gh<{ sha: string; commit: { committer: { date: string } | null; author: { date: string } } }[]>(
+      `/repos/${repo}/commits?author=${encodeURIComponent(login)}&since=${encodeURIComponent(sinceIso)}&per_page=${PER_PAGE}&page=${page}`,
+      undefined,
+      { orgId },
+    );
+    commits.push(...batch.map((c) => ({ sha: c.sha, date: c.commit.committer?.date ?? c.commit.author.date })));
+    if (batch.length < PER_PAGE) return { commits, complete: true as boolean, resumeAt: undefined as string | undefined };
+  }
+  return { commits, complete: false, resumeAt: commits.at(-1)?.date };
 }
 
-/** Commit comments and PR/issue comments in a repo since a date. */
-export async function listRepoComments(repo: string, sinceIso: string) {
-  const [commitComments, issueComments] = await Promise.all([
-    gh<GhComment[]>(`/repos/${repo}/comments?per_page=50&sort=created&direction=desc`).catch(() => []),
-    gh<GhComment[]>(`/repos/${repo}/issues/comments?since=${encodeURIComponent(sinceIso)}&per_page=50`).catch(() => []),
-  ]);
-  return [...commitComments, ...issueComments]
-    .filter((c) => c.created_at > sinceIso && c.user)
+/**
+ * Commit comments and PR/issue comments in a repo since a date. Errors are
+ * thrown, not swallowed, so sync knows not to move past what it couldn't read.
+ * When there are more than we read, `resumeAt` says where the next sync picks up.
+ */
+export async function listRepoComments(repo: string, sinceIso: string, orgId?: string) {
+  const auth: Auth = { orgId };
+  const since = Date.parse(sinceIso);
+  const isNew = (c: GhComment) => Date.parse(c.created_at) > since;
+  let complete = true;
+  let resumeAt: string | undefined;
+  const resume = (when: string | undefined) => {
+    if (when && (!resumeAt || Date.parse(when) < Date.parse(resumeAt))) resumeAt = when;
+  };
+
+  // Commit comments come oldest first with no date filter, so read from the last page back.
+  const first = await request(`/repos/${repo}/comments?per_page=${PER_PAGE}`, undefined, auth);
+  const last = lastPage(first);
+  const commitComments: GhComment[] = [];
+  for (let page = last, read = 0; page >= 1; page--, read++) {
+    if (read === MAX_PAGES) {
+      // Older commit comments than these are given up on.
+      complete = false;
+      resume(commitComments.at(0)?.created_at);
+      break;
+    }
+    const batch = page === 1 ? ((await first.json()) as GhComment[]) : await gh<GhComment[]>(`/repos/${repo}/comments?per_page=${PER_PAGE}&page=${page}`, undefined, auth);
+    commitComments.unshift(...batch);
+    if (batch.length && !isNew(batch[0])) break;
+  }
+
+  // Issue comments filter by `since` (last update), least recently updated first,
+  // so the next sync carries on from the last one read.
+  const issueComments: GhComment[] = [];
+  for (let page = 1; ; page++) {
+    if (page > MAX_PAGES) {
+      complete = false;
+      resume(issueComments.at(-1)?.updated_at);
+      break;
+    }
+    const batch = await gh<GhComment[]>(
+      `/repos/${repo}/issues/comments?since=${encodeURIComponent(sinceIso)}&sort=updated&direction=asc&per_page=${PER_PAGE}&page=${page}`,
+      undefined,
+      auth,
+    );
+    issueComments.push(...batch);
+    if (batch.length < PER_PAGE) break;
+  }
+
+  const comments = [...commitComments, ...issueComments]
+    .filter((c) => isNew(c) && c.user)
     .map((c) => ({
       id: c.id,
       body: c.body,
@@ -185,4 +296,5 @@ export async function listRepoComments(repo: string, sinceIso: string) {
       login: c.user!.login,
       commitSha: c.commit_id,
     }));
+  return { comments, complete, resumeAt };
 }

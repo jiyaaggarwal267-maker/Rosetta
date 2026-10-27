@@ -6,7 +6,9 @@ export function applyEdits(explanation: Explanation, edits: CardEdits): Explanat
   const levels = { ...explanation.levels };
   for (const [key, fields] of Object.entries(edits.levels ?? {})) {
     const level = key as LevelKey;
-    levels[level] = { ...levels[level], ...fields };
+    // Only levels this reader was sent can be edited.
+    const current = levels[level];
+    if (current) levels[level] = { ...current, ...fields };
   }
   return { ...explanation, title: edits.title ?? explanation.title, levels };
 }

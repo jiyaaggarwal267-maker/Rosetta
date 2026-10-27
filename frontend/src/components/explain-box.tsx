@@ -21,6 +21,8 @@ export function ExplainBox({ samples = false }: { samples?: boolean }) {
   const [value, setValue] = useState("");
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [error, setError] = useState<ApiCode | null>(null);
+  /** The server's own words, when it explains a refusal (no access, too many tries). */
+  const [detail, setDetail] = useState<string | null>(null);
   const loading = phase.kind === "loading";
 
   const start = async (url: string) => {
@@ -31,6 +33,7 @@ export function ExplainBox({ samples = false }: { samples?: boolean }) {
       return;
     }
     setError(null);
+    setDetail(null);
     setPhase({ kind: "loading", findings: [], stage: null });
     try {
       const card = await explain(url, (event) =>
@@ -45,6 +48,7 @@ export function ExplainBox({ samples = false }: { samples?: boolean }) {
     } catch (e) {
       setPhase({ kind: "idle" });
       setError(e instanceof ApiError ? e.code : "unavailable");
+      setDetail(e instanceof ApiError && e.detail && ["forbidden", "not_found", "rate_limited", "conflict"].includes(e.code) ? e.detail : null);
     }
   };
 
@@ -71,8 +75,8 @@ export function ExplainBox({ samples = false }: { samples?: boolean }) {
       <AiNotice what="The commit's code is" className="mt-2 px-1" />
       <div id="explain-status" className="mt-2 min-h-6 px-1">
         {copy && (
-          <p role="alert" className="t-small font-medium text-fg-1">
-            {copy.message}
+          <p role="alert" className="t-small font-medium text-danger">
+            {detail ?? copy.message}
             {error === "invalid_url" && <span className="font-normal text-fg-2"> Links look like <span className="font-mono">{EXAMPLE_LINK}</span></span>}
           </p>
         )}

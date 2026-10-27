@@ -7,7 +7,14 @@ import { cn } from "@/lib/utils";
 const WORD: Record<Verification["confidence"], string> = { high: "High", medium: "Medium", low: "Low" };
 const TONE: Record<Verification["confidence"], string> = { high: "var(--risk-low)", medium: "var(--risk-medium)", low: "var(--risk-high)" };
 
-type Short = { score: number; level: Verification["confidence"]; checkedBy: Verification["checkedBy"]; needsReview: boolean };
+type Short = { score: number | null; level: Verification["confidence"]; checkedBy: Verification["checkedBy"]; needsReview: boolean; unscored?: boolean };
+
+/** No judge was available (rules only), so there is no real number to show. */
+const isUnscored = (v: { score: number | null; unscored?: boolean; checkedBy?: Verification["checkedBy"] }) =>
+  v.unscored === true || v.checkedBy === "code" || typeof v.score !== "number";
+
+/** One format everywhere: "92/100". */
+export const formatScore = (score: number) => `${score}/100`;
 
 /** A check mark in a ring that fills with the score. Icon + word + number, never color alone. */
 function Ring({ score }: { score: number }) {
@@ -32,11 +39,18 @@ export function ConfidencePill({ c }: { c: Short }) {
       </span>
     );
   }
+  if (isUnscored(c)) {
+    return (
+      <span className={pill} style={{ "--tone": TONE.medium } as CSSProperties} title="No accuracy score yet">
+        Not scored yet
+      </span>
+    );
+  }
   return (
     <span className={pill} style={{ "--tone": TONE[c.level] } as CSSProperties} title="How well the explanation matches the code">
-      <Ring score={c.score} />
-      {c.score}
-      <span className="sr-only">/100 checked against the code</span>
+      <Ring score={c.score ?? 0} />
+      {formatScore(c.score ?? 0)}
+      <span className="sr-only"> checked against the code</span>
     </span>
   );
 }
@@ -47,18 +61,22 @@ export function ConfidencePill({ c }: { c: Short }) {
  */
 export function ConfidenceBadge({ v, approved, showIssues }: { v: Verification; approved: boolean; showIssues: boolean }) {
   const [open, setOpen] = useState(false);
-  const style = { "--tone": v.needsReview && !approved ? TONE.low : TONE[v.confidence] } as CSSProperties;
+  const unscored = v.checkedBy !== "sample" && isUnscored(v);
+  const style = { "--tone": v.needsReview && !approved ? TONE.low : unscored ? TONE.medium : TONE[v.confidence] } as CSSProperties;
+  const score = unscored ? "" : ` (${formatScore(v.score ?? 0)})`;
   const label =
     v.checkedBy === "sample"
       ? "Sample explanation, checked by hand"
       : v.needsReview && !approved
-        ? `Needs engineer review (${v.score}/100)`
-        : `Checked against the code: ${WORD[v.confidence]} (${v.score}/100)`;
+        ? `Needs engineer review${score}`
+        : unscored
+          ? "Not scored yet: the accuracy check wasn't available"
+          : `Checked against the code: ${WORD[v.confidence]}${score}`;
 
   return (
     <div className="grid justify-items-start gap-2">
       <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className={cn("press cursor-pointer", pill)} style={style}>
-        <Ring score={v.checkedBy === "sample" ? 100 : v.score} />
+        <Ring score={v.checkedBy === "sample" ? 100 : (v.score ?? 0)} />
         {label}
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className={cn("transition-transform", open && "rotate-180")}>
           <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -71,7 +89,9 @@ export function ConfidenceBadge({ v, approved, showIssues }: { v: Verification; 
           ) : (
             <>
               <p>
-                {v.checkedBy === "ai"
+                {unscored
+                  ? "Rosetta couldn't score this explanation: the accuracy check wasn't available when it was written. Use Check accuracy to try again, and treat it as a draft until then."
+                  : v.checkedBy === "ai"
                   ? "Rosetta checked this explanation against the real code in two ways: plain rules (no code words for non-technical readers, no names that aren't in the change) and a second AI model that scores accuracy, completeness and the flowchart."
                   : "Rosetta checked this explanation against the real code with plain rules: no code words for non-technical readers, and no names that aren't in the change. A second AI check wasn't available, so it can't score higher than Medium."}
                 {v.retried && " The first version scored low, so it was rewritten once with the problems as feedback."}

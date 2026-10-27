@@ -5,7 +5,9 @@ import { useEffect, useState, type CSSProperties } from "react";
 import * as api from "@/lib/api";
 import type { Verification } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 import { Button } from "./button";
+import { formatScore } from "./confidence";
 import { CheckIcon, CloseIcon } from "./icons";
 import { Spinner } from "./spinner";
 
@@ -68,7 +70,8 @@ export function CheckAccuracy({
   const [steps, setSteps] = useState<Partial<Record<api.CheckStep["key"], StepState>>>({});
   const [result, setResult] = useState<Verification | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const shown = useCountUp(result?.score ?? null);
+  const unscored = result !== null && result.checkedBy !== "sample" && (result.unscored === true || result.checkedBy === "code" || typeof result.score !== "number");
+  const shown = useCountUp(unscored ? null : (result?.score ?? null));
 
   const run = async () => {
     setSteps({});
@@ -79,13 +82,17 @@ export function CheckAccuracy({
       setResult(v);
       onChecked(v);
     } catch (e) {
-      setError(e instanceof api.ApiError && e.code === "rate_limited" ? "That's a lot of checks. Try again in a few minutes." : "The check couldn't finish. Try again in a minute.");
+      setError(
+        e instanceof api.ApiError && e.code === "rate_limited" && !e.detail
+          ? "That's a lot of checks. Try again in a few minutes."
+          : errorText(e, "The check couldn't finish. Try again in a minute."),
+      );
     }
   };
 
   const sample = result?.checkedBy === "sample";
   const visible = sample ? STEPS.slice(0, 1) : STEPS;
-  const tone = result ? (result.needsReview ? TONE.low : TONE[result.confidence]) : "var(--color-fg-3)";
+  const tone = result ? (result.needsReview ? TONE.low : unscored ? TONE.medium : TONE[result.confidence]) : "var(--color-fg-3)";
 
   return (
     <Dialog.Root
@@ -141,7 +148,7 @@ export function CheckAccuracy({
 
           {error && (
             <div className="mt-6 grid justify-items-start gap-3">
-              <p role="alert" className="t-small font-medium text-fg-1">
+              <p role="alert" className="t-small font-medium text-danger">
                 {error}
               </p>
               <Button onClick={run}>Try again</Button>
@@ -153,10 +160,14 @@ export function CheckAccuracy({
               <div className="relative">
                 <ScoreRing score={shown} tone={tone} />
                 <p className="absolute inset-0 grid place-items-center">
-                  <span>
-                    <span className="block font-display text-[2.25rem] leading-none font-semibold text-fg-1 tabular-nums">{shown}%</span>
-                    <span className="mt-1 block t-micro text-fg-3">match with the code</span>
-                  </span>
+                  {unscored ? (
+                    <span className="block t-small font-semibold text-fg-1">Not scored</span>
+                  ) : (
+                    <span>
+                      <span className="block font-display text-[1.75rem] leading-none font-semibold text-fg-1 tabular-nums">{formatScore(shown)}</span>
+                      <span className="mt-1 block t-micro text-fg-3">match with the code</span>
+                    </span>
+                  )}
                 </p>
               </div>
               <p className="t-body font-semibold" style={{ color: tone } as CSSProperties}>
@@ -164,12 +175,16 @@ export function CheckAccuracy({
                   ? "Hand-checked sample"
                   : result.needsReview
                     ? "Needs engineer review"
-                    : `${WORD[result.confidence]} confidence: this explanation matches the code`}
+                    : unscored
+                      ? "Not scored: treat it as a draft"
+                      : `${WORD[result.confidence]} confidence: this explanation matches the code`}
               </p>
               <p className="max-w-[24rem] t-small text-fg-2">
                 {sample
                   ? "This is one of Rosetta's built-in samples, written and checked by hand."
-                  : result.checkedBy === "ai"
+                  : unscored
+                    ? "The accuracy check wasn't available, so there's no score this time. Try again later."
+                    : result.checkedBy === "ai"
                     ? "Scored by a second model and plain code rules. Checking the same change again gives the same score."
                     : "Scored by plain code rules only; the second model wasn't available, so it can't go above Medium."}
               </p>

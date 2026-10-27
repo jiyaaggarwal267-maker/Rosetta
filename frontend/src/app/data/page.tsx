@@ -49,7 +49,7 @@ export default function DataPage() {
         caption="Workspace data"
         head={["Data", "Example", "Why we need it", "Where", "Who else sees it", "How long"]}
         rows={[
-          ["Workspace", "Name, owner, watched repositories, webhook secret", "To run the workspace", DB, "Leads in the workspace", "Until the workspace is deleted"],
+          ["Workspace", "Name, owner, watched repositories, webhook secret", "To run the workspace", DB, "Leads in the workspace (the webhook secret: only the workspace owner)", "Until the workspace is deleted"],
           ["Commit details", "Repository, commit ID, message, author, changed files", "To explain the change and link to it", DB + "; read from GitHub", "People whose role lets them see that change", "Until the change or workspace is deleted"],
           ["The diff (code change)", "The lines added and removed", "To write and check the explanation", "Read from GitHub, sent to the AI provider, not stored", "The AI provider", "Not kept by us"],
           ["Code behind each step", "Up to 6 lines per flowchart step", "So anyone can check a step against the code", DB, "People who can see that change", "Until the change is deleted"],

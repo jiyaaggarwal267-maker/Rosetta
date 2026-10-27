@@ -72,6 +72,6 @@ export const DELETE = route<Ctx>(async (req, { params }) => {
     ...comments.map((c) => store.remove("comments", c.id)),
     ...notes.filter((n) => n.href === `/app/c/${id}`).map((n) => store.remove("notifications", n.id)),
   ]);
-  await store.set("deleted", id, { orgId: me.orgId, repo: card.repo, by: me.id, at: new Date().toISOString() });
+  await store.set("deleted", id, { id, orgId: me.orgId, repo: card.repo, by: me.id, at: new Date().toISOString() });
   return json({ deleted: id });
 });

@@ -54,7 +54,7 @@ export function ConsentFields({
           </span>
         </label>
         {error && (
-          <p id="acceptTerms-error" className="pl-8 t-small font-medium text-fg-1">
+          <p id="acceptTerms-error" className="pl-8 t-small font-medium text-danger">
             {error}
           </p>
         )}

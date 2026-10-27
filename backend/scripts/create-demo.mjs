@@ -43,5 +43,5 @@ const seed = await call("POST", "/api/demo/seed", null, cmo.token);
 
 console.log("\nDemo workspace: Acme Retail\n");
 console.log(`  CMO          kavya.${stamp}@demo.rosetta.dev   password: ${password}`);
-for (const l of seed.logins) console.log(`  ${l.role.padEnd(12)} ${l.email.padEnd(34)} password: ${seed.password}`);
+for (const l of seed.logins) console.log(`  ${l.role.padEnd(12)} ${l.email.padEnd(42)} password: ${seed.password}`);
 console.log("\nLog in at the frontend with any of these. Each person sees their own version.");

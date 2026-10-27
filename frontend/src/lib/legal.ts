@@ -21,7 +21,7 @@ export const POLICY_VERSION = "2026-10-18";
 export const GRIEVANCE_RESPONSE = "[Response time, e.g. acknowledged within 24 hours, resolved within 15 days]";
 /** Refund window for paid plans, once they exist. */
 export const REFUND_WINDOW = "[X days]";
-export const SOURCE_URL = process.env.NEXT_PUBLIC_SOURCE_URL || "https://github.com/code-crunchers/rosetta";
+export const SOURCE_URL = process.env.NEXT_PUBLIC_SOURCE_URL || "https://github.com/vaibhav025/Rosetta-NSUT";
 
 /** The legal pages, in footer order. */
 export const LEGAL_PAGES = [

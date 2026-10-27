@@ -28,7 +28,7 @@ export function SiteFooter({ className }: { className?: string }) {
           </a>
         </p>
         <p className="flex flex-wrap gap-x-4">
-          <span>Built for Devlympics 2026</span>
+          <span>Built for Developers</span>
           <a href={SOURCE_URL} target="_blank" rel="noreferrer" className={link}>
             Source code<span className="sr-only"> (opens GitHub in a new tab)</span>
           </a>

@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { isLead } from "@/lib/roles";
+import { canOpen, isLead } from "@/lib/roles";
 import { useSession } from "@/lib/session";
 import * as api from "@/lib/api";
+import { errorText } from "@/lib/errors";
 import type { Digest } from "@/lib/types";
 import { firstName, timeAgo } from "@/lib/utils";
-import { Page } from "./app-shell";
+import { LoadError, NotForRole, Page } from "./app-shell";
 import { Button } from "./button";
 import { StatTile } from "./feed";
 import { Avatar, PersonLine } from "./person";
@@ -22,10 +23,14 @@ export function DigestView() {
   const [week, setWeek] = useState(0);
   const [digest, setDigest] = useState<Digest | null>(null);
   const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const allowed = user ? canOpen(user.role, "/app/digest") : false;
 
   useEffect(() => {
+    if (!allowed) return;
     let current = true;
     setDigest(null);
+    setError(false);
     api
       .getDigest(week)
       .then((d) => current && (setDigest(d), setError(false)))
@@ -33,7 +38,9 @@ export function DigestView() {
     return () => {
       current = false;
     };
-  }, [week]);
+  }, [week, allowed, attempt]);
+
+  if (user && !allowed) return <NotForRole title="This week" />;
 
   return (
     <Page
@@ -54,7 +61,7 @@ export function DigestView() {
       }
     >
       {error ? (
-        <p className="t-body text-fg-2">The digest can&rsquo;t load right now. Try again in a minute.</p>
+        <LoadError message="This week's summary can't load right now." onRetry={() => setAttempt((n) => n + 1)} />
       ) : !digest ? (
         <p className="t-body text-fg-3" role="status">
           Putting the week together…
@@ -204,7 +211,7 @@ function WeeklyReport() {
       setPreview({ subject: r.subject, html: r.html });
       if (send) toast(r.sent ? `Sent to ${r.to}.` : options.email ? `Couldn't email ${r.to}. Their address may be a sample one.` : "Email isn't set up on the server, so here's the preview.");
     } catch (e) {
-      toast(e instanceof api.ApiError && e.detail ? e.detail : "The report couldn't be made. Try again in a minute.");
+      toast(errorText(e, "The report couldn't be made. Try again in a minute."));
     } finally {
       setBusy(null);
     }
@@ -216,8 +223,8 @@ function WeeklyReport() {
         Weekly report email
       </h2>
       <p className="mt-1 max-w-(--w-read) t-small text-fg-2">
-        Every Monday, {options.owner.isMe ? "you get" : `${options.owner.name} gets`} one email per week: what each engineer shipped, every change
-        with its flowchart and a worked example, written for {options.owner.isMe ? "you" : "them"}.
+        Every Monday, {options.owner.isMe ? "you get" : `${options.owner.name} gets`} an email of what was shipped last week: every change with
+        its flowchart and a worked example, written for {options.owner.isMe ? "you" : "them"}. Preview one engineer&rsquo;s week, or everyone&rsquo;s.
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label className="grid gap-1">
@@ -238,18 +245,21 @@ function WeeklyReport() {
             {options.engineers.length > 1 && <option value="all">Everyone</option>}
           </select>
         </label>
-        <label className="mt-5 inline-flex cursor-pointer items-center gap-2 t-small text-fg-1">
-          <input
-            type="checkbox"
-            checked={sample}
-            onChange={(e) => {
-              setSample(e.target.checked);
-              setPreview(null);
-            }}
-            className="size-4 accent-(--btn-primary-bg)"
-          />
-          Sample week for demos
-        </label>
+        {/* Only sample workspaces get the made-up week; real teams always see their own. */}
+        {options.demo && (
+          <label className="mt-5 inline-flex cursor-pointer items-center gap-2 t-small text-fg-1">
+            <input
+              type="checkbox"
+              checked={sample}
+              onChange={(e) => {
+                setSample(e.target.checked);
+                setPreview(null);
+              }}
+              className="size-4 accent-(--btn-primary-bg)"
+            />
+            Fill in an example week
+          </label>
+        )}
         <div className="mt-5 flex gap-2">
           <Button onClick={() => run(false)} loading={busy === "preview"} disabled={!sample && chosen?.changes === 0 && engineer !== "all"}>
             Preview
@@ -260,7 +270,9 @@ function WeeklyReport() {
         </div>
       </div>
       {!sample && chosen?.changes === 0 && engineer !== "all" && (
-        <p className="mt-3 t-small text-fg-3">{chosen.name.split(" ")[0]} has no changes in the last 7 days. Turn on the sample week to see a full report.</p>
+        <p className="mt-3 t-small text-fg-3">
+          {chosen.name.split(" ")[0]} has no changes in the last 7 days.{options.demo ? " Fill in an example week to see a full report." : ""}
+        </p>
       )}
       {preview && (
         <div className="mt-6 overflow-hidden rounded-md shadow-ring">

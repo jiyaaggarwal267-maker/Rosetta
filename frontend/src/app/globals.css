@@ -44,6 +44,7 @@
   --color-fg-2: var(--text-2);
   --color-fg-3: var(--text-3);
   --color-focus: var(--focus);
+  --color-danger: var(--danger);
 
   --shadow-elev-1: var(--elev-1);
   --shadow-elev-2: var(--elev-2);
@@ -96,6 +97,8 @@
   --risk-low: #6fc2a0;
   --risk-medium: #e6b85c;
   --risk-high: #e8857e;
+  /* Error text: 5.9:1 on surface-1, 6.8:1 on bg (WCAG AA). */
+  --danger: #e8857e;
 
   --ink-a: #1a3d63;
   --ink-b: #4a7fa7;
@@ -133,6 +136,8 @@
   --risk-low: #2f7d62;
   --risk-medium: #8c6110;
   --risk-high: #b4423b;
+  /* Error text: 5.6:1 on surface-1, 4.8:1 on surface-2 (WCAG AA). */
+  --danger: #b4423b;
 
   color-scheme: light;
 }

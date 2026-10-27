@@ -49,7 +49,11 @@ const ROLE_NOUN: Record<LevelKey, string> = {
   cmo: "the CMO",
 };
 
-const day = (iso: string) => new Date(iso).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+/** Dates are shown in India time (the app is written for en-IN); the server itself usually runs in UTC. */
+export const REPORT_TIME_ZONE = "Asia/Kolkata";
+
+const day = (iso: string) =>
+  new Date(iso).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", timeZone: REPORT_TIME_ZONE });
 
 /* ------------------------------------------------------------------ */
 /* Flowchart as email-safe HTML                                        */
@@ -143,9 +147,11 @@ function changeBlock(item: ReportItem, level: LevelKey, appUrl: string) {
   const trust = v
     ? v.checkedBy === "sample"
       ? "Checked by hand"
-      : v.needsReview && item.status !== "approved"
-        ? `Needs engineer review (${v.score}/100)`
-        : `Checked against the code: ${v.confidence === "high" ? "High" : v.confidence === "medium" ? "Medium" : "Low"} (${v.score}/100)`
+      : v.checkedBy === "code"
+        ? "Not scored by a second model yet"
+        : v.needsReview && item.status !== "approved"
+          ? `Needs engineer review (${v.score}/100)`
+          : `Checked against the code: ${v.confidence === "high" ? "High" : v.confidence === "medium" ? "Medium" : "Low"} (${v.score}/100)`
     : "";
   const before = e.flow.before;
   const beforeKeys = new Set(before?.nodes.map((n) => n.key) ?? []);

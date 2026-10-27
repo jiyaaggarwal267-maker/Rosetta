@@ -170,6 +170,8 @@ export function ManageMember({ team, member, onClose, onChanged }: Props) {
                 optional
                 value={github}
                 onChange={(e) => setGithub(e.target.value)}
+                readOnly={member.githubVerified}
+                hint={member.githubVerified ? "Verified on GitHub by them, so only they can change it." : undefined}
                 autoCapitalize="off"
                 spellCheck={false}
               />
@@ -179,7 +181,7 @@ export function ManageMember({ team, member, onClose, onChanged }: Props) {
             )}
 
             {error && (
-              <p role="alert" className="t-small font-medium whitespace-pre-line text-fg-1">
+              <p role="alert" className="t-small font-medium whitespace-pre-line text-danger">
                 {error}
               </p>
             )}

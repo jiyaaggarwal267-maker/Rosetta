@@ -35,13 +35,22 @@ export type Explanation = {
   files: string[];
   flow: { before: FlowGraph | null; after: FlowGraph };
   walkthrough?: Walkthrough;
-  levels: Record<LevelKey, LevelText>;
+  /**
+   * Every level for reviewers and technical readers; non-technical readers
+   * get only their own level, so any other key may be missing.
+   */
+  levels: Partial<Record<LevelKey, LevelText>>;
   verification?: Verification;
   evidence?: Record<string, Evidence>;
 };
 
+/** An explanation with every level present, e.g. the built-in samples. */
+export type FullExplanation = Explanation & { levels: Record<LevelKey, LevelText> };
+
 export type Verification = {
-  score: number;
+  /** null when no judge was available to score it. */
+  score: number | null;
+  unscored?: boolean;
   confidence: "high" | "medium" | "low";
   checkedBy: "ai" | "code" | "sample";
   issues: string[];
@@ -93,7 +102,9 @@ export type ApiErrorCode =
   | "not_found"
   | "unavailable"
   | "sample_only"
-  | "network";
+  | "network"
+  /** The browser stopped waiting; the server may still be working. */
+  | "timeout";
 
 /* ------------------------------------------------------------------ */
 /* People and organisations                                            */
@@ -117,6 +128,11 @@ export type User = {
   title?: string;
   /** Maps GitHub commits and comments to this person. */
   githubLogin?: string;
+  /** Set when they proved the GitHub account by logging in to GitHub. */
+  githubId?: number;
+  githubVerified?: boolean;
+  /** Managers and CMOs: email when a teammate's push is explained. On unless turned off. */
+  notifyEmailOnPush?: boolean;
   focus: Focus[];
   language: "en" | "hinglish";
   status: "active" | "invited";
@@ -136,6 +152,8 @@ export type Org = {
   ownerId: string;
   /** owner/repo names Rosetta watches for new commits. */
   repos: string[];
+  /** Extra branches per repository; missing or empty means the default branch only. */
+  branches?: Record<string, string[]>;
   webhookSecret: string;
   lastSyncAt?: string;
   createdAt: string;
@@ -150,7 +168,8 @@ export type StoredCard = Card & {
   reading: string;
   findings: string[];
   createdBy?: string;
-  source: "manual" | "sync" | "webhook" | "demo";
+  /** "push": arrived through the GitHub App; "webhook": the older per-workspace webhook. */
+  source: "manual" | "sync" | "webhook" | "push" | "demo";
   createdAt: string;
   approvedAt?: string;
 };
@@ -209,7 +228,7 @@ export type AiUsage = {
   fallback: ProviderUsage;
   tasks: Record<string, number>;
 };
-export type ProviderUsage = { configured: boolean; used: number; limit: number; left: number; exhausted: boolean };
+export type ProviderUsage = { configured: boolean; used: number; limit: number; left: number; exhausted: boolean; sharedLimitReached?: boolean };
 
 export type OrgSummary = { id: string; name: string; ownerId: string };
 
@@ -219,6 +238,8 @@ export type Person = {
   role: Role;
   title?: string;
   githubLogin?: string;
+  /** They proved this GitHub account by logging in to GitHub. */
+  githubVerified?: boolean;
   status: "active" | "invited";
   managerId?: string;
   team: { id: string; name: string } | null;
@@ -240,7 +261,55 @@ export type TeamView = {
   /** The person who created the workspace: may change roles and remove people. */
   isOwner: boolean;
   members: Member[];
-  org: OrgSummary & { repos: string[]; lastSyncAt: string | null; webhookPath?: string; webhookSecret?: string };
+  org: OrgSummary & {
+    repos: string[];
+    branches: Record<string, string[]>;
+    lastSyncAt: string | null;
+    /** The GitHub App connection; getGithubStatus has the details. */
+    github: { connected: boolean; account: string | null };
+    webhookPath?: string;
+    webhookSecret?: string;
+  };
+};
+
+/* ---------- GitHub App ---------- */
+
+export type GithubRepo = { fullName: string; private: boolean; defaultBranch: string; watched: boolean; branches: string[] };
+
+export type GithubRepos = { connected: false; account: null; repos: [] } | { connected: true; account: string | null; repos: GithubRepo[] };
+
+export type GithubQueue = { queued: number; running: number; done: number; failed: number; skipped: number; unassigned: number };
+
+export type GithubStatus = {
+  app: { configured: boolean; linkAccounts: boolean };
+  connected: boolean;
+  account: string | null;
+  connectedAt: string | null;
+  manageUrl: string | null;
+  repos: string[];
+  branches: Record<string, string[]>;
+  lastWebhookAt: string | null;
+  lastWebhookEvent: string | null;
+  lastSyncAt: string | null;
+  queue: GithubQueue;
+  failures: { id: string; repo: string; sha: string; subject: string; error: string; tries: number; at: string }[];
+};
+
+/** Pushes Rosetta couldn't match to anyone, grouped by who GitHub says wrote them. */
+export type UnassignedGroup = {
+  key: string;
+  login: string | null;
+  email: string | null;
+  names: string[];
+  commits: number;
+  repos: string[];
+  latestAt: string;
+  recent: { repo: string; sha: string; subject: string; committedAt: string }[];
+};
+
+export type Unassigned = {
+  groups: UnassignedGroup[];
+  people: { id: string; name: string; role: Role; githubLogin: string | null }[];
 };
 
 export type FeedItem = {
@@ -258,7 +327,7 @@ export type FeedItem = {
   authorName: string;
   files: number;
   sample?: boolean;
-  confidence: { score: number; level: Verification["confidence"]; checkedBy: Verification["checkedBy"]; needsReview: boolean } | null;
+  confidence: { score: number | null; level: Verification["confidence"]; checkedBy: Verification["checkedBy"]; needsReview: boolean; unscored?: boolean } | null;
   reports: number;
   comments: number;
   openQuestions: number;
@@ -294,7 +363,7 @@ export type DigestCard = {
   committedAt: string;
   author: Person | null;
   authorName: string;
-  confidence: { score: number; level: Verification["confidence"] } | null;
+  confidence: { score: number | null; level: Verification["confidence"] } | null;
 };
 
 export type Digest = {

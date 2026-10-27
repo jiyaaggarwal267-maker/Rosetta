@@ -2,7 +2,7 @@ import { z } from "zod";
 import { deleteWorkspace, removeMember } from "@/lib/account";
 import { publicUser, requireUser } from "@/lib/auth";
 import { ApiError, json, preflight, readJson, route } from "@/lib/http";
-import { orgMembers } from "@/lib/org";
+import { assertGithubLoginFree, orgMembers } from "@/lib/org";
 import { meSchema } from "@/lib/profile";
 import { store } from "@/lib/store";
 import type { Org, StoredUser } from "@/lib/types";
@@ -26,7 +26,15 @@ export const PATCH = route(async (req) => {
   const patch = Object.fromEntries(Object.entries(parsed).filter(([key]) => key in raw));
   const stored = await store.get<StoredUser>("users", id);
   if (!stored) throw new ApiError("unauthorized");
+  if (patch.githubLogin && String(patch.githubLogin).toLowerCase() !== stored.githubLogin?.toLowerCase()) {
+    assertGithubLoginFree(String(patch.githubLogin), await orgMembers(stored.orgId), id);
+  }
   const next: StoredUser = { ...stored, ...patch, updatedAt: new Date().toISOString() };
+  // A different username than the one proven on GitHub isn't proven any more.
+  if ("githubLogin" in patch && String(patch.githubLogin ?? "").toLowerCase() !== (stored.githubLogin ?? "").toLowerCase()) {
+    delete next.githubId;
+    delete next.githubVerified;
+  }
   await store.set("users", id, next);
   return json({ user: publicUser(next) });
 });

@@ -4,8 +4,9 @@ import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { ApiError, json, preflight, readJson, route } from "@/lib/http";
 import { canMessage, canSeeCard, orgMembers } from "@/lib/org";
+import { limit } from "@/lib/ratelimit";
 import { store } from "@/lib/store";
-import { ticketView } from "@/lib/tickets";
+import { NODE_KEY, technicalQuestionFor, ticketView } from "@/lib/tickets";
 import { sendQuestion } from "@/lib/mail";
 import { notifications } from "@/lib/notify";
 import { translateTicketMessageLater } from "@/lib/translate";
@@ -24,7 +25,8 @@ export const GET = route(async (req) => {
     store.list<Ticket>("tickets", "orgId", me.orgId),
     store.list<StoredCard>("cards", "orgId", me.orgId),
   ]);
-  const titles = new Map(cards.map((c) => [c.id, c.explanation.title]));
+  // Only titles of cards I can open: a question about one I can't see doesn't reveal it.
+  const titles = new Map(cards.filter((c) => canSeeCard(me, c, users)).map((c) => [c.id, c.explanation.title]));
   const mine = tickets
     .filter((t) => t.fromId === me.id || t.toId === me.id)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -40,9 +42,8 @@ const body = z.object({
   toId: z.string(),
   subject: z.string().trim().min(1).max(120),
   text: z.string().trim().min(1).max(2000),
-  context: z
-    .object({ cardId: z.string(), nodeKey: z.string(), technicalQuestion: z.string().max(1000).optional() })
-    .optional(),
+  // A technicalQuestion sent here is ignored: the server uses the one Rosetta wrote in /api/ask.
+  context: z.object({ cardId: z.string(), nodeKey: z.string().regex(NODE_KEY) }).optional(),
 });
 
 /**
@@ -51,15 +52,20 @@ const body = z.object({
  */
 export const POST = route(async (req) => {
   const me = await requireUser(req);
+  // Every message is rewritten for six readers by a model: a fair number per person.
+  limit(`ticket:${me.id}`, 20, 60 * 60_000);
   const input = await readJson(req, body);
   const users = await orgMembers(me.orgId);
   const to = users.find((u) => u.id === input.toId);
   if (!to || !canMessage(me, to, users)) throw new ApiError("forbidden", "You can't message this person.");
 
   let card: StoredCard | null = null;
+  let context: Ticket["context"];
   if (input.context) {
     card = await store.get<StoredCard>("cards", input.context.cardId);
     if (!card || !canSeeCard(me, card, users)) throw new ApiError("not_found");
+    const technicalQuestion = await technicalQuestionFor(me.id, card.id, input.context.nodeKey);
+    context = { cardId: card.id, nodeKey: input.context.nodeKey, ...(technicalQuestion ? { technicalQuestion } : {}) };
   }
 
   const now = new Date().toISOString();
@@ -69,7 +75,7 @@ export const POST = route(async (req) => {
     fromId: me.id,
     toId: to.id,
     subject: input.subject,
-    ...(input.context ? { context: input.context } : {}),
+    ...(context ? { context } : {}),
     status: "open",
     messages: [{ id: newId("tm"), authorId: me.id, createdAt: now, text: input.text }],
     unreadBy: [to.id],
@@ -78,7 +84,9 @@ export const POST = route(async (req) => {
   };
   await store.set("tickets", ticket.id, ticket);
   // Send at once; the version for each reader is written in the background.
-  after(() => translateTicketMessageLater(ticket.id, ticket.messages[0].id, me.name, card?.explanation.title));
+  // The recipient may not be able to open the card, so its title isn't sent as context for them.
+  const shared = card && canSeeCard(to, card, users) ? card.explanation.title : undefined;
+  after(() => translateTicketMessageLater(ticket.id, ticket.messages[0].id, me.name, shared));
   after(() => notifications.question({ orgId: me.orgId, to: to.id, fromName: me.name, subject: input.subject, ticketId: ticket.id }));
   after(() => sendQuestion({ to: to.email, toName: to.name, fromName: me.name, subject: input.subject, text: input.text, ticketId: ticket.id }));
   return json({ ticket: ticketView(ticket, me, users, card?.explanation.title) }, 201);

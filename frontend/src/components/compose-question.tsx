@@ -104,7 +104,7 @@ export function ComposeQuestion({ open, onOpenChange, people, toId, subject = ""
               />
             </label>
             {error && (
-              <p role="alert" className="t-small font-medium text-fg-1">
+              <p role="alert" className="t-small font-medium text-danger">
                 {error}
               </p>
             )}

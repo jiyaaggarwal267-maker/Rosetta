@@ -37,7 +37,8 @@ describe("health", () => {
   test("reports the isolated setup", async () => {
     const h = (await req("GET", "/api/health")).data;
     assert.equal(h.store, "file");
-    assert.equal(h.email, false);
+    // Which integrations are set up isn't public.
+    for (const k of ["email", "github", "gemini", "fallback"]) assert.equal(k in h, false, k);
   });
 });
 
@@ -278,7 +279,11 @@ describe("account", () => {
     const wrong = await r("POST", "/api/me/password", { current: "nope-nope", next: "new-pass-123" }, T.priya);
     assert.equal(wrong.status, 401);
     assert.equal((await r("POST", "/api/me/password", { current: seed.password, next: "short" }, T.priya)).status, 400);
-    assert.equal((await r("POST", "/api/me/password", { current: seed.password, next: "new-pass-123" }, T.priya)).status, 200);
+    const changed = await r("POST", "/api/me/password", { current: seed.password, next: "new-pass-123" }, T.priya);
+    assert.equal(changed.status, 200);
+    assert.equal((await r("GET", "/api/me", undefined, T.priya)).status, 401, "the old token stops working");
+    assert.equal((await r("GET", "/api/me", undefined, changed.data.token)).status, 200, "this device keeps the new one");
+    T.priya = changed.data.token;
     const email = seed.logins.find((l) => l.name.startsWith("Priya")).email;
     assert.equal((await r("POST", "/api/auth/login", { email, password: seed.password })).status, 401);
     assert.equal((await r("POST", "/api/auth/login", { email, password: "new-pass-123" })).status, 200);
@@ -612,13 +617,153 @@ describe("security", () => {
       status = (await attacker("POST", "/api/auth/login", { email: "kavya@acme.test", password: `wrong-${i}` })).status;
     }
     assert.equal(status, 429);
-    // The real owner, from their own address, is locked out of this account too
-    // (account limit) until the window passes. That's the trade-off we accept.
+    // Enough guesses from many addresses also slow down new addresses for this
+    // account (see "strangers can't lock the owner out" below for known devices).
   });
 
   test("password reset never reveals whether an email exists", async () => {
     const a = await server.client()("POST", "/api/auth/forgot", { email: "nobody@nowhere.test" });
     const b = await server.client()("POST", "/api/auth/forgot", { email: "neha@acme.test" });
     assert.equal(a.status, b.status);
+  });
+});
+
+describe("regressions", () => {
+  const join = async (r, code, password) => (await r("POST", "/api/auth/join", { code, password, acceptTerms: true })).data;
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+  test("pasting a change you can't see doesn't replay it", async () => {
+    const id = (await feed("arjun")).items.find((i) => /servers/i.test(i.title)).id;
+    const card = (await req("GET", `/api/cards/${id}`, undefined, T.arjun)).data;
+    const r = await req("POST", "/api/explain", { url: card.url }, T.rahul);
+    assert.equal(r.status, 404);
+    assert.doesNotMatch(JSON.stringify(r.data), /pickNextServer/);
+    assert.equal(lines((await req("POST", "/api/explain", { url: card.url }, T.arjun)).data).at(-1).card.id, id, "its engineer still can");
+  });
+
+  test("clients see comments, checks and replays only for changes they can open", async () => {
+    const r = server.client();
+    const add = await r("POST", "/api/team/members", { name: "Cara Client", email: "cara@acme.test", role: "client" }, T.neha);
+    assert.equal(add.status, 201);
+    const cara = (await join(r, add.data.inviteCode, "cara-password")).token;
+    const pitch = lines((await req("POST", "/api/explain", { url: PITCH }, T.arjun)).data).at(-1).card;
+    assert.equal(pitch.status, "draft");
+    assert.equal((await req("POST", `/api/cards/${pitch.id}/comments`, { text: "Draft-only note." }, T.arjun)).status, 201);
+    const theirs = (await r("GET", "/api/comments", undefined, cara)).data.items;
+    assert.ok(!theirs.some((c) => c.card?.id === pitch.id));
+    assert.doesNotMatch(JSON.stringify(theirs), /Draft-only note/);
+    assert.ok((await req("GET", "/api/comments", undefined, T.neha)).data.items.some((c) => c.card?.id === pitch.id), "the manager does");
+    assert.equal((await r("POST", "/api/explain", { url: PITCH }, cara)).status, 404, "nor replay the draft");
+
+    const approved = (await r("GET", "/api/feed", undefined, cara)).data.items[0];
+    const levels = (await r("GET", `/api/cards/${approved.id}`, undefined, cara)).data.explanation.levels;
+    assert.deepEqual(Object.keys(levels), ["client"], "only their own version");
+    const result = lines((await r("POST", `/api/cards/${approved.id}/check`, undefined, cara)).data).at(-1);
+    assert.deepEqual(result.card.verification.issues, [], "no issue list for clients");
+  });
+
+  test("a client left without a manager sees nothing, not the whole workspace", async () => {
+    const r = server.client();
+    const direct = await r("POST", "/api/team/members", { name: "Direct Client", email: "dc@acme.test", role: "client" }, T.cmo);
+    assert.equal(direct.status, 400, "a CMO can't keep a client directly");
+    const mgr = await r("POST", "/api/team/members", { name: "Mo Manager", email: "mo@acme.test", role: "manager" }, T.cmo);
+    const mo = await join(r, mgr.data.inviteCode, "mo-password1");
+    const cl = await r("POST", "/api/team/members", { name: "Cy Client", email: "cy@acme.test", role: "client" }, mo.token);
+    const cy = (await join(r, cl.data.inviteCode, "cy-password1")).token;
+    assert.equal((await r("DELETE", `/api/team/members/${mo.user.id}`, undefined, T.cmo)).status, 200);
+    assert.equal((await r("GET", "/api/feed", undefined, cy)).data.items.length, 0);
+  });
+
+  test("a GitHub username belongs to one person", async () => {
+    assert.equal((await req("PATCH", "/api/me", { githubLogin: "ARJUN-MEHTA" }, T.rahul)).status, 409);
+    const copy = await req("POST", "/api/team/members", { name: "Copy Cat", email: "cat@acme.test", role: "engineer", githubLogin: "arjun-mehta" }, T.neha);
+    assert.equal(copy.status, 409);
+  });
+
+  test("a deleted account's token doesn't work for a new account with the same email", async () => {
+    const r = server.client();
+    const add = await r("POST", "/api/team/members", { name: "Re Ann", email: "reann@acme.test", role: "engineer" }, T.neha);
+    const old = (await join(r, add.data.inviteCode, "reann-pass-1")).token;
+    assert.equal((await r("DELETE", "/api/me", { confirm: "reann@acme.test" }, old)).status, 200);
+    await sleep(1100); // Tokens carry whole seconds.
+    const again = await r("POST", "/api/team/members", { name: "Re Ann", email: "reann@acme.test", role: "engineer" }, T.neha);
+    const fresh = (await join(r, again.data.inviteCode, "reann-pass-2")).token;
+    assert.equal((await r("GET", "/api/me", undefined, old)).status, 401);
+    assert.equal((await r("GET", "/api/me", undefined, fresh)).status, 200);
+  });
+
+  test("only the owner changes watched repositories or sees the webhook secret", async () => {
+    assert.equal((await req("PATCH", "/api/org", { repos: ["acme/site"] }, T.neha)).status, 403);
+    assert.equal((await req("GET", "/api/team", undefined, T.neha)).data.org.webhookSecret, undefined);
+    assert.ok((await req("GET", "/api/team", undefined, T.cmo)).data.org.webhookSecret);
+  });
+
+  test("a step key like __proto__ is refused or ignored, never crashes", async () => {
+    const pitch = lines((await req("POST", "/api/explain", { url: PITCH }, T.arjun)).data).at(-1).card;
+    assert.equal((await req("POST", "/api/ask", { cardId: pitch.id, nodeKey: "__proto__", question: "Why?" }, T.neha)).status, 400);
+    const ticket = { toId: ids.arjun, subject: "x", text: "y", context: { cardId: pitch.id, nodeKey: "__proto__" } };
+    assert.equal((await req("POST", "/api/tickets", ticket, T.neha)).status, 400);
+    const rep = await req("POST", `/api/cards/${pitch.id}/report`, { text: "This step is wrong.", nodeKey: "__proto__" }, T.neha);
+    assert.equal(rep.status, 201);
+    assert.equal(rep.data.ticket.context?.nodeKey || "", "");
+    assert.equal((await req("GET", `/api/tickets/${rep.data.ticket.id}`, undefined, T.arjun)).status, 200);
+  });
+
+  test("someone else pasting the pitch commit reads it; they don't take it over", async () => {
+    const out = lines((await req("POST", "/api/explain", { url: PITCH }, T.neha)).data);
+    assert.ok(!out.some((l) => l.type === "writing"), "a replay, not a new explanation");
+    assert.equal(out.at(-1).card.authorPerson?.name, "Arjun Mehta");
+    assert.equal((await req("POST", "/api/explain", { url: PITCH }, T.rahul)).status, 404, "another engineer can't see it");
+  });
+
+  test("a pitch commit a lead rehearsed is claimed by the first engineer", async () => {
+    const r = server.client();
+    const boss = (await signup(r, "Lead Lia", "lia@rehearse.test", "Rehearse")).data.token;
+    const lead = lines((await r("POST", "/api/explain", { url: PITCH }, boss)).data).at(-1).card;
+    assert.equal(lead.authorPerson?.name, "Lead Lia", "no engineer wrote it yet, so it's whoever explained it");
+    const add = await r("POST", "/api/team/members", { name: "Eng Eli", email: "eli@rehearse.test", role: "engineer" }, boss);
+    const eli = (await join(r, add.data.inviteCode, "eli-password")).token;
+    assert.equal(lines((await r("POST", "/api/explain", { url: PITCH }, eli)).data).at(-1).card.authorPerson?.name, "Eng Eli");
+  });
+
+  test("a spoofed X-Forwarded-For doesn't buy more password guesses", async () => {
+    let status = 0;
+    for (let i = 0; i < 12 && status !== 429; i++) {
+      const spoofed = server.client(`203.0.113.${i}, 10.8.8.8`);
+      status = (await spoofed("POST", "/api/auth/login", { email: "spoof@acme.test", password: `wrong-${i}` })).status;
+    }
+    assert.equal(status, 429);
+  });
+
+  test("addresses in one IPv6 /64 share a limit", async () => {
+    let status = 0;
+    for (let i = 1; i < 12 && status !== 429; i++) {
+      const rotating = server.client(`2001:db8::${i.toString(16)}`);
+      status = (await rotating("POST", "/api/auth/login", { email: "six@acme.test", password: `wrong-${i}` })).status;
+    }
+    assert.equal(status, 429);
+  });
+
+  test("strangers can't lock the owner out of a device they logged in from", async () => {
+    const home = server.client();
+    await signup(home, "Lock Lu", "lu@lock.test", "Lock Co");
+    assert.equal((await home("POST", "/api/auth/login", { email: "lu@lock.test", password: "pass-word-1" })).status, 200);
+    for (let ip = 0; ip < 7; ip++) {
+      const a = server.client(`198.51.100.${ip}`);
+      for (let i = 0; i < 8; i++) await a("POST", "/api/auth/login", { email: "lu@lock.test", password: `nope-${i}` });
+    }
+    const stranger = await server.client()("POST", "/api/auth/login", { email: "lu@lock.test", password: "pass-word-1" });
+    assert.equal(stranger.status, 429, "a new address waits");
+    assert.equal((await home("POST", "/api/auth/login", { email: "lu@lock.test", password: "pass-word-1" })).status, 200, "a known device doesn't");
+  });
+
+  // Last: it removes Rahul.
+  test("a removed member's synced changes stay with their team, reviewable by nobody", async () => {
+    const retry = (await feed("neha")).items.find((i) => /retry/i.test(i.title));
+    assert.ok(retry, "Rahul's change, which nobody pasted (no creator)");
+    assert.equal((await req("DELETE", `/api/team/members/${ids.rahul}`, undefined, T.cmo)).status, 200);
+    assert.ok((await feed("neha")).items.some((i) => i.id === retry.id), "his manager still sees it");
+    const card = (await req("GET", `/api/cards/${retry.id}`, undefined, T.neha)).data;
+    assert.equal(card.viewer.canReview, false);
   });
 });

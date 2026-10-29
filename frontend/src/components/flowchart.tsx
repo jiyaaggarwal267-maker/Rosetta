@@ -27,12 +27,12 @@ function loadMermaid() {
         fontFamily: font,
         fontSize: "14px",
         background: "transparent",
-        primaryColor: "#142F4F",
-        primaryTextColor: "#F6FAFD",
-        primaryBorderColor: "#4A7FA7",
-        lineColor: "#8098AF",
-        secondaryColor: "#102642",
-        tertiaryColor: "#102642",
+        primaryColor: "#151515",
+        primaryTextColor: "#FFFFFF",
+        primaryBorderColor: "#C8F53C",
+        lineColor: "#737373",
+        secondaryColor: "#0B0B0B",
+        tertiaryColor: "#0B0B0B",
       },
       flowchart: {
         curve: "basis",
@@ -219,7 +219,7 @@ export function HowItWorks({ explanation, level, onAsk, askLabel, askHint = "Sel
   const trace = hasWalk && step !== null ? steps[step].path : null;
 
   return (
-    <section aria-labelledby="how-heading" className="rounded-md bg-surface-1 p-6 shadow-elev-1 sm:p-8">
+    <section aria-labelledby="how-heading" className="how-card rounded-md bg-surface-1 p-6 shadow-elev-1 sm:p-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 id="how-heading" className="t-heading text-fg-1">
@@ -231,7 +231,7 @@ export function HowItWorks({ explanation, level, onAsk, askLabel, askHint = "Sel
           </p>
         </div>
         {before ? (
-          <div role="tablist" aria-label="Before or after" className="inline-grid grid-cols-2 rounded-sm bg-surface-2 p-1 shadow-ring">
+          <div role="tablist" aria-label="Before or after" className="inline-grid grid-cols-2 rounded-full bg-surface-2 p-1 shadow-ring">
             {(["before", "after"] as const).map((p) => (
               <button
                 key={p}
@@ -243,7 +243,7 @@ export function HowItWorks({ explanation, level, onAsk, askLabel, askHint = "Sel
                   setStep(null);
                 }}
                 className={cn(
-                  "press h-8 rounded-[6px] px-4 t-small font-medium",
+                  "press h-8 rounded-full px-4 t-small font-medium",
                   panel === p ? "bg-surface-1 text-fg-1 shadow-elev-1" : "text-fg-2 hover:text-fg-1",
                 )}
               >
@@ -270,7 +270,7 @@ export function HowItWorks({ explanation, level, onAsk, askLabel, askHint = "Sel
       </div>
 
       {hasWalk && (
-        <div className="mt-8 rounded-sm bg-surface-2 p-5 shadow-ring">
+        <div className="how-walk mt-8 rounded-sm bg-surface-2 p-5 shadow-ring">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="t-body font-semibold text-fg-1">{level.walkthrough!.title}</h3>
             <div className="flex items-center gap-1" aria-hidden>
@@ -279,7 +279,7 @@ export function HowItWorks({ explanation, level, onAsk, askLabel, askHint = "Sel
                   key={i}
                   className={cn(
                     "size-2 rounded-full transition-[background-color] duration-150",
-                    step !== null && i <= step ? "bg-steel" : "bg-(--ring-strong)",
+                    step !== null && i <= step ? "bg-accent" : "bg-(--ring-strong)",
                   )}
                 />
               ))}

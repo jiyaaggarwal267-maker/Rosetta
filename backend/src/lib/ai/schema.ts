@@ -141,9 +141,13 @@ const keyOf = (key: string) =>
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "") || "step";
 
+/** Words Mermaid reads as flowchart syntax, so a node can't be called one. */
+const MERMAID_WORDS = new Set(["end", "graph", "flowchart", "subgraph", "style", "class", "classdef", "click", "linkstyle", "direction", "default", "call", "href", "callback"]);
+
 /** Mermaid edge ids are L_<from>_<to>_<n>, so node ids must be plain alphanumerics. */
 const cleanId = (id: string, fallback: string) => {
   const clean = id.replace(/[^A-Za-z0-9]/g, "");
+  if (MERMAID_WORDS.has(clean.toLowerCase())) return `${clean}Node`;
   return /^[A-Za-z]/.test(clean) ? clean : `${fallback}${clean}`;
 };
 

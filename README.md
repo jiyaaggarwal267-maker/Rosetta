@@ -93,7 +93,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000, create a workspace as a CMO or manager, then press **Add a sample team**. Every sample person can log in with the email shown and the password `rosetta-demo`, so you can see each role's view.
+Open http://localhost:3000, create a workspace as a CMO or manager, then press **Add a sample team**. Every sample person can log in with the email and the random password shown once in the result, so you can see each role's view.
 
 ## Configuration
 

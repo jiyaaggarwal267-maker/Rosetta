@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useSession } from "@/lib/session";
 import type { Feed, FeedItem, Person } from "@/lib/types";
 import { cn, firstName, timeAgo } from "@/lib/utils";
 import { ConfidencePill } from "./confidence";
@@ -61,6 +62,9 @@ export function StatTile({ label, value, hint, tone }: { label: string; value: n
 /** One change in a feed, already written at the reader's level. */
 export function FeedCard({ item, showAuthor = true, onDeleted }: { item: FeedItem; showAuthor?: boolean; onDeleted?: (id: string) => void }) {
   const author = item.author;
+  // Clients read business terms: no GitHub pills, repository names or commit IDs.
+  const { user } = useSession();
+  const technicalDetails = user?.role !== "client";
   return (
     <li className="relative">
       <Link
@@ -103,7 +107,7 @@ export function FeedCard({ item, showAuthor = true, onDeleted }: { item: FeedIte
               {item.reports === 1 ? "1 mistake reported" : `${item.reports} mistakes reported`}
             </span>
           )}
-          {item.source === "sync" || item.source === "webhook" ? (
+          {technicalDetails && (item.source === "sync" || item.source === "webhook" || item.source === "push") ? (
             <span className="inline-flex h-6 items-center rounded-xs bg-surface-2 px-2 text-fg-3">Arrived from GitHub</span>
           ) : null}
           {item.comments > 0 && (
@@ -116,9 +120,11 @@ export function FeedCard({ item, showAuthor = true, onDeleted }: { item: FeedIte
               · {item.openQuestions} open {item.openQuestions === 1 ? "question" : "questions"}
             </span>
           )}
-          <span className={cn("ml-auto font-mono text-fg-3", onDeleted && "mr-8")}>
-            {item.repo.split("/")[1]} · {item.ref}
-          </span>
+          {technicalDetails && (
+            <span className={cn("ml-auto font-mono text-fg-3", onDeleted && "mr-8")}>
+              {item.repo.split("/")[1]} · {item.ref}
+            </span>
+          )}
         </div>
       </Link>
       {onDeleted && (

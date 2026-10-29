@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { env } from "./env";
 
@@ -20,7 +20,8 @@ export type Collection =
   | "usage"
   | "notifications"
   | "checks"
-  | "deleted";
+  | "deleted"
+  | "jobs";
 
 interface Store {
   get<T>(collection: Collection, id: string): Promise<T | null>;
@@ -98,39 +99,111 @@ class FirestoreStore implements Store {
 
 class FileStore implements Store {
   private file = path.join(process.env.DATA_DIR || path.join(process.cwd(), ".data"), "store.json");
-  private data: Record<string, Record<string, unknown>>;
+  private data: Record<string, Record<string, unknown>> = {};
+  /** The file's mtime when we last read or wrote it, to notice writes by another process. */
+  private mtime = 0;
+  /** Changes are waiting to be written. */
+  private dirty = false;
 
   constructor() {
-    this.data = existsSync(this.file) ? JSON.parse(readFileSync(this.file, "utf8")) : {};
+    // A write still waiting for its turn of the event loop isn't lost when the process ends.
+    process.once("exit", () => {
+      if (!this.dirty) return;
+      this.dirty = false;
+      try {
+        this.flush();
+      } catch {
+        // Nothing more to do while exiting.
+      }
+    });
+    if (!existsSync(this.file)) return;
+    try {
+      this.mtime = statSync(this.file).mtimeMs;
+      this.data = JSON.parse(readFileSync(this.file, "utf8"));
+    } catch (error) {
+      // A damaged file is set aside rather than stopping every start.
+      const aside = `${this.file}.corrupt-${Date.now()}`;
+      try {
+        renameSync(this.file, aside);
+      } catch {
+        // Couldn't move it: the next write replaces it.
+      }
+      console.error(`[rosetta] ${this.file} could not be read; moved it to ${aside} and started empty.`, error);
+      this.data = {};
+      this.mtime = 0;
+    }
   }
 
+  /** Picks up writes from another process (a second server, a script) when nothing of ours is pending. */
+  private refresh() {
+    if (this.dirty) return;
+    try {
+      const mtime = statSync(this.file).mtimeMs;
+      if (mtime === this.mtime) return;
+      this.data = JSON.parse(readFileSync(this.file, "utf8"));
+      this.mtime = mtime;
+    } catch {
+      // Missing or unreadable: keep what's in memory.
+    }
+  }
+
+  /** Writes a temp file and renames it over the store, so a crash never leaves half a file. */
   private flush() {
     mkdirSync(path.dirname(this.file), { recursive: true });
-    writeFileSync(this.file, JSON.stringify(this.data, null, 2));
+    const text = JSON.stringify(this.data, null, 2);
+    const tmp = `${this.file}.${process.pid}.tmp`;
+    writeFileSync(tmp, text);
+    try {
+      renameSync(tmp, this.file);
+    } catch {
+      // Windows can refuse to replace a file another program has open.
+      writeFileSync(this.file, text);
+    }
+    this.mtime = statSync(this.file).mtimeMs;
+  }
+
+  /** Writes once per turn of the event loop, so deleting many documents in a row rewrites the file once. */
+  private save() {
+    if (this.dirty) return;
+    this.dirty = true;
+    setImmediate(() => {
+      this.dirty = false;
+      try {
+        this.flush();
+      } catch (error) {
+        console.error("[rosetta] could not write the file store:", error);
+      }
+    });
   }
 
   async get<T>(collection: Collection, id: string) {
+    this.refresh();
     const doc = this.data[collection]?.[id];
     return doc ? (structuredClone(doc) as T) : null;
   }
 
   async set<T extends object>(collection: Collection, id: string, data: T) {
+    this.refresh();
     (this.data[collection] ??= {})[id] = JSON.parse(JSON.stringify(data));
-    this.flush();
+    this.save();
   }
 
   async remove(collection: Collection, id: string) {
-    delete this.data[collection]?.[id];
-    this.flush();
+    this.refresh();
+    if (!this.data[collection] || !(id in this.data[collection])) return;
+    delete this.data[collection][id];
+    this.save();
   }
 
   async list<T>(collection: Collection, field: string, value: string) {
+    this.refresh();
     return Object.values(this.data[collection] ?? {})
       .filter((doc) => (doc as Record<string, unknown>)[field] === value)
       .map((doc) => structuredClone(doc) as T);
   }
 
   async all<T>(collection: Collection) {
+    this.refresh();
     return Object.values(this.data[collection] ?? {}).map((doc) => structuredClone(doc) as T);
   }
 }

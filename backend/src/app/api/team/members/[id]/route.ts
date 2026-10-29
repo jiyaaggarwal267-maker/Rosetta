@@ -2,7 +2,7 @@ import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { ApiError, json, preflight, route } from "@/lib/http";
 import { heirOf, moveReports, removeMember } from "@/lib/account";
-import { CAN_ADD, descendants, orgMembers, personOf, requireOrg } from "@/lib/org";
+import { aRole, assertGithubLoginFree, CAN_ADD, descendants, orgMembers, personOf, requireOrg } from "@/lib/org";
 import { roleSchema } from "@/lib/profile";
 import { store } from "@/lib/store";
 import type { Org, StoredCard, StoredUser, User } from "@/lib/types";
@@ -48,6 +48,14 @@ export const PATCH = route<Ctx>(async (req, { params }) => {
   for (const k of ["title", "githubLogin", "teamName"] as const) {
     if (k in raw) next[k] = parsed[k] || undefined;
   }
+  const loginChanged = (next.githubLogin ?? "").toLowerCase() !== (member.githubLogin ?? "").toLowerCase();
+  // A username proven on GitHub is theirs to change, not their lead's.
+  if (loginChanged && member.githubVerified) {
+    throw new ApiError("conflict", `${member.name} linked their GitHub account, so only they can change their GitHub username.`);
+  }
+  if (next.githubLogin && loginChanged) {
+    assertGithubLoginFree(next.githubLogin, users, id);
+  }
 
   if (sent("role") || sent("managerId")) {
     if (!owner) throw new ApiError("forbidden", "Only the workspace owner can change roles or reporting lines.");
@@ -56,13 +64,9 @@ export const PATCH = route<Ctx>(async (req, { params }) => {
 
   if (sent("role") && parsed.role !== member.role) {
     const role = parsed.role!;
-    if (!CAN_ADD[me.role].includes(role)) throw new ApiError("forbidden", `Someone can't be made a ${role} here.`);
+    if (!CAN_ADD[me.role].includes(role)) throw new ApiError("forbidden", `Someone can't be made ${aRole(role)} here.`);
     next.role = role;
-    if (role !== "manager") {
-      // A manager who steps down hands their team to the person above them.
-      next.teamName = undefined;
-      await moveReports(member, heirOf(member, org), users, now);
-    }
+    if (role !== "manager") next.teamName = undefined;
   }
 
   if (sent("managerId") && parsed.managerId !== member.managerId) {
@@ -76,9 +80,27 @@ export const PATCH = route<Ctx>(async (req, { params }) => {
     next.managerId = target!.id;
   }
 
-  await store.set("users", id, next);
+  // A client reads their manager's team; under a CMO or the owner that would be the whole workspace.
+  if ((sent("role") || sent("managerId")) && next.role === "client") {
+    const manager = users.find((u) => u.id === next.managerId);
+    if (manager?.role !== "manager") {
+      throw new ApiError("bad_request", "A client can only report to a manager. They see only that manager's team.");
+    }
+  }
+
+  if (next.role !== member.role && next.role !== "manager") {
+    // A manager who steps down hands their team to the person above them. Done
+    // last, so a request refused above changes nothing.
+    await moveReports(member, heirOf(member, org), users, now);
+  }
+  // Only the fields edited here, onto the latest record: a password change or reset
+  // that landed meanwhile keeps its new hash and session version.
+  const latest = (await store.get<StoredUser>("users", id)) ?? member;
+  const { title, githubLogin, teamName, role, managerId } = next;
+  const saved: StoredUser = { ...latest, title, githubLogin, teamName, role, managerId, updatedAt: now };
+  await store.set("users", id, saved);
   const after = await orgMembers(org.id);
-  return json({ member: personOf(next, after) });
+  return json({ member: personOf(saved, after) });
 });
 
 /**

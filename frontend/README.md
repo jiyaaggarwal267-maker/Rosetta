@@ -32,8 +32,8 @@ npm install && npm run dev                       # http://localhost:3000
 | `/app/digest` | leads, clients | **This week**: headline, what changed, what needs attention, who shipped what. Save as PDF. Leads also preview and send the **weekly report email** (per engineer, every flowchart, written for the owner) |
 | `/app/updates` | leads | Every change engineers push and their comments (Rosetta and GitHub), newest first, by engineer, team or kind |
 | `/app/questions` · `/app/questions/[id]` | everyone | Questions asked of me / by me; threads rewritten for each reader |
-| `/app/team` | leads | People by team, add someone (invite code), watched repositories, sync, webhook setup, today's AI use; the owner renames the workspace and manages people |
-| `/app/profile` | everyone | Name, title, GitHub username, focus, language (English or Hinglish), password, product emails, Download my data, Delete my account |
+| `/app/team` | leads | People by team (verified GitHub accounts ticked), add someone (invite code), GitHub: the owner connects the GitHub app, picks repositories and branches; leads see push status and match unknown authors (without the app: owner/repo box and webhook setup), today's AI use; the owner renames the workspace and manages people |
+| `/app/profile` | everyone | Name, title, GitHub username, Link GitHub (verified account), push emails (leads), focus, language (English or Hinglish), password, product emails, Download my data, Delete my account |
 | `/privacy` · `/terms` · `/cookies` · `/refunds` · `/data` · `/contact` · `/licenses` | everyone | Legal pages, each with an "In plain words" summary; linked from every footer |
 
 Every signed-in page has the notification bell. Feeds have search (in the reader's own words), date, risk and repository filters, and "Show more".
@@ -42,6 +42,7 @@ Every signed-in page has the notification bell. Feeds have search (in the reader
 
 - `src/components/flowchart.tsx`: `FlowDiagram` (JSON → Mermaid with shapes, groups and edge labels; path highlighting) and `HowItWorks` (before/after + walkthrough)
 - `src/components/dashboards.tsx`: the per-role homes; `feed.tsx`: feed cards, search and filters
+- `src/components/github.tsx`: connect GitHub, repository and branch picker, push status, unmatched pushes; `src/lib/github-app.ts`: the ?github= return messages
 - `src/components/confidence.tsx` · `evidence.tsx`: the verification badge and the code behind each step
 - `src/components/notification-bell.tsx` · `digest.tsx`: the bell and the weekly page
 - `src/lib/roles.ts`: roles, tabs per role

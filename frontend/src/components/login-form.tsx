@@ -37,7 +37,13 @@ export function LoginForm() {
       router.replace(next);
     } catch (err) {
       const code = err instanceof ApiError ? err.code : "unavailable";
-      setError(ERROR_COPY[code].message);
+      setError(
+        code === "network" || code === "unavailable"
+          ? "Rosetta can't be reached right now. Try again in a minute."
+          : code !== "invalid_credentials" && err instanceof ApiError && err.detail
+            ? err.detail
+            : ERROR_COPY[code].message,
+      );
       setBusy(false);
       emailRef.current?.focus();
     }
@@ -71,7 +77,7 @@ export function LoginForm() {
             onChange={(e) => setPassword(e.target.value)}
           />
           {error && (
-            <p role="alert" className="t-small font-medium text-fg-1">
+            <p role="alert" className="t-small font-medium text-danger">
               {error}
             </p>
           )}

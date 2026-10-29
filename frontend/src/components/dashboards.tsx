@@ -4,15 +4,18 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import * as api from "@/lib/api";
+import { errorText } from "@/lib/errors";
+import { goTo } from "@/lib/github-app";
 import { roleLabel } from "@/lib/roles";
-import { useSession } from "@/lib/session";
+import { SAMPLE_LOGINS_PREFIX, useSession } from "@/lib/session";
 import type { CommentView, Feed, Member, Person, TicketSummary, User } from "@/lib/types";
 import { cn, firstName, timeAgo } from "@/lib/utils";
-import { Page } from "./app-shell";
+import { LoadError, Page } from "./app-shell";
 import { Button, buttonStyles } from "./button";
 import { ComposeQuestion } from "./compose-question";
 import { ExplainBox } from "./explain-box";
 import { FeedList, FeedTools, FilterChips, LoadMore, NO_TOOLS, personChip, StatTile, type ToolsValue } from "./feed";
+import { useGithubStatus } from "./github";
 import { Avatar, PersonLine } from "./person";
 
 /** Each role lands somewhere different. */
@@ -77,10 +80,18 @@ function useTools() {
 
 function useMembers() {
   const [members, setMembers] = useState<Member[]>([]);
-  useEffect(() => {
-    api.getTeam().then((t) => setMembers(t.members)).catch(() => {});
+  const [loaded, setLoaded] = useState(false);
+  const load = useCallback(() => {
+    api
+      .getTeam()
+      .then((t) => {
+        setMembers(t.members);
+        setLoaded(true);
+      })
+      .catch(() => {});
   }, []);
-  return members;
+  useEffect(load, [load]);
+  return { members, loaded, reload: load };
 }
 
 function Loading() {
@@ -91,12 +102,75 @@ function Loading() {
   );
 }
 
-function Unavailable() {
+function Unavailable({ onRetry }: { onRetry: () => void }) {
+  return <LoadError message="Changes can't load right now." onRetry={onRetry} />;
+}
+
+/** Per person, so someone else signing in on this browser never sees them (logout clears them too). */
+const sampleLoginsKey = (userId: string) => `${SAMPLE_LOGINS_PREFIX}${userId}`;
+type SampleLogins = { password: string; logins: { name: string; role: Member["role"]; email: string }[] };
+
+/** The sample team's logins stay on screen (and across a reload) until dismissed. */
+function useSampleLogins(userId: string) {
+  const [value, setValue] = useState<SampleLogins | null>(null);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(sampleLoginsKey(userId));
+      setValue(saved ? (JSON.parse(saved) as SampleLogins) : null);
+    } catch {
+      /* storage unavailable or unreadable: nothing to show */
+    }
+  }, [userId]);
+  const save = useCallback(
+    (next: SampleLogins | null) => {
+      setValue(next);
+      try {
+        if (next) localStorage.setItem(sampleLoginsKey(userId), JSON.stringify(next));
+        else localStorage.removeItem(sampleLoginsKey(userId));
+      } catch {
+        /* storage unavailable: shown for this page only */
+      }
+    },
+    [userId],
+  );
+  return [value, save] as const;
+}
+
+function SampleLoginsPanel({ value, onDismiss }: { value: SampleLogins; onDismiss: () => void }) {
+  const copy = async () => {
+    const text = [`Password: ${value.password}`, ...value.logins.map((l) => `${l.name} (${roleLabel(l.role)}): ${l.email}`)].join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Sample logins copied.");
+    } catch {
+      toast("Couldn't copy. Select the text instead.");
+    }
+  };
   return (
-    <div className="rounded-md p-8 shadow-ring">
-      <p className="t-body font-medium text-fg-1">Rosetta can&rsquo;t reach its server right now.</p>
-      <p className="mt-1 t-small text-fg-2">Check that the backend is running, then reload the page.</p>
-    </div>
+    <section aria-labelledby="sample-logins-heading" className="mb-8 rounded-md bg-surface-1 p-6 shadow-elev-1">
+      <h2 id="sample-logins-heading" className="t-heading text-fg-1">
+        Sample team added
+      </h2>
+      <p className="mt-1 max-w-(--w-read) t-small text-fg-2">
+        Log in as any of them to see their view. They all use the password{" "}
+        <span className="font-mono font-semibold text-fg-1 select-all">{value.password}</span>. Note these down before you dismiss this.
+      </p>
+      <ul className="mt-4 grid gap-1">
+        {value.logins.map((l) => (
+          <li key={l.email} className="flex flex-wrap items-baseline gap-x-2 t-small">
+            <span className="font-medium text-fg-1">{l.name}</span>
+            <span className="text-fg-3">{roleLabel(l.role)}</span>
+            <span className="font-mono break-all text-fg-2 select-all">{l.email}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button onClick={copy}>Copy logins</Button>
+        <Button variant="ghost" onClick={onDismiss}>
+          I&rsquo;ve noted them
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -109,9 +183,15 @@ function EngineerHome({ user }: { user: User }) {
   const { tools, setTools, query } = useTools();
   const { feed, error, reload, loadMore, loadingMore } = useData({ status, ...query });
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
+  // Whether the workspace gets pushes through GitHub, so unproven accounts are asked to link.
+  const [githubConnected, setGithubConnected] = useState(false);
 
   useEffect(() => {
     api.getTickets().then((t) => setTickets(t.received.filter((x) => x.status !== "closed"))).catch(() => setTickets([]));
+    api
+      .getTeam()
+      .then((t) => setGithubConnected(Boolean(t.org.github?.connected)))
+      .catch(() => {});
   }, []);
 
   const waiting = tickets?.filter((t) => t.status === "open") ?? [];
@@ -119,10 +199,10 @@ function EngineerHome({ user }: { user: User }) {
   return (
     <Page
       title={`Hi ${firstName(user.name)}`}
-      lead="Your changes, explained. Check each one so your manager reads it right, and answer the questions that come back."
+      lead="Every push you make is explained for your team. Check each one reads right, and answer the questions that come back."
     >
       {error ? (
-        <Unavailable />
+        <Unavailable onRetry={reload} />
       ) : !feed ? (
         <Loading />
       ) : (
@@ -134,7 +214,7 @@ function EngineerHome({ user }: { user: User }) {
               <StatTile label="Questions for you" value={waiting.length} tone="attention" />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="t-heading text-fg-1">Your changes</h2>
+              <h2 className="t-heading text-fg-1">Your recent pushes</h2>
               <FilterChips
                 label="Show"
                 options={[
@@ -154,11 +234,11 @@ function EngineerHome({ user }: { user: User }) {
               onDeleted={() => reload()}
               empty={
                 <>
-                  <p className="t-body font-medium text-fg-1">No changes yet.</p>
+                  <p className="t-body font-medium text-fg-1">No pushes yet.</p>
                   <p className="mt-1 t-small text-fg-2">
-                    {feed.sync.repos
-                      ? "Commits you push to your team's repositories show up here automatically."
-                      : "Paste a commit link on the right, or ask your manager to connect your repositories."}
+                    {feed.sync.repos || githubConnected
+                      ? "Commits you push to your team's repositories show up here automatically, explained."
+                      : "Ask your manager to connect your team's GitHub. Until then, you can explain a specific commit."}
                   </p>
                 </>
               }
@@ -167,12 +247,13 @@ function EngineerHome({ user }: { user: User }) {
           </div>
 
           <aside className="grid min-w-0 grid-cols-1 gap-6 card:col-span-4">
+            {githubConnected && !user.githubVerified && <LinkGithubPrompt />}
             <section className="rounded-md bg-surface-1 p-6 shadow-elev-1">
               <h2 className="t-heading text-fg-1">Questions for you</h2>
               {!tickets ? (
                 <p className="mt-3 t-small text-fg-3">Loading…</p>
               ) : tickets.length === 0 ? (
-                <p className="mt-3 t-small text-fg-2">Nothing waiting. Questions from your manager land here.</p>
+                <p className="mt-3 t-small text-fg-2">Nothing waiting. Questions from your team land here.</p>
               ) : (
                 <ul className="mt-4 grid grid-cols-1 gap-2">
                   {tickets.slice(0, 5).map((t) => (
@@ -181,15 +262,62 @@ function EngineerHome({ user }: { user: User }) {
                 </ul>
               )}
             </section>
-            <section className="rounded-md bg-surface-1 p-6 shadow-elev-1">
-              <h2 className="t-heading text-fg-1">Explain a commit</h2>
-              <p className="mt-1 mb-4 t-small text-fg-2">Paste a public commit or pull request you have permission to share.</p>
+            <details className="group rounded-md bg-surface-1 p-6 shadow-elev-1">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 t-body font-semibold text-fg-1 [&::-webkit-details-marker]:hidden">
+                Explain a specific commit
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden className="shrink-0 text-fg-3 transition-transform group-open:rotate-180">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </summary>
+              <p className="mt-2 mb-4 t-small text-fg-2">
+                Your pushes are explained without this. Paste a public commit or pull request you have permission to share.
+              </p>
               <ExplainBox samples />
-            </section>
+            </details>
           </aside>
         </div>
       )}
     </Page>
+  );
+}
+
+/** Pushes are matched by GitHub account; proving it means nobody else can claim them. */
+function LinkGithubPrompt() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hidden, setHidden] = useState(false);
+  if (hidden) return null;
+  const link = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      goTo((await api.githubLinkUrl()).url);
+    } catch (e) {
+      setBusy(false);
+      // Linking accounts isn't set up on this server: nothing to ask for.
+      if (e instanceof api.ApiError && e.code === "unavailable") {
+        setHidden(true);
+        toast(e.detail ?? "Linking GitHub accounts isn't set up for Rosetta yet.");
+        return;
+      }
+      setError(errorText(e, "Couldn't reach GitHub right now. Try again in a minute."));
+    }
+  };
+  return (
+    <section aria-labelledby="link-github-heading" className="rounded-md bg-surface-1 p-6 shadow-elev-1">
+      <h2 id="link-github-heading" className="t-heading text-fg-1">
+        Link your GitHub
+      </h2>
+      <p className="mt-1 t-small text-fg-2">Log in to GitHub once so your pushes are matched to you and explained automatically.</p>
+      {error && (
+        <p role="alert" className="mt-3 t-small font-medium text-danger">
+          {error}
+        </p>
+      )}
+      <Button variant="primary" onClick={link} loading={busy} className="mt-4">
+        Link GitHub
+      </Button>
+    </section>
   );
 }
 
@@ -216,14 +344,19 @@ function TicketRow({ ticket }: { ticket: TicketSummary }) {
 
 function LeadHome({ user }: { user: User }) {
   const cmo = user.role === "cmo";
+  const { org } = useSession();
+  const owner = org?.ownerId === user.id;
+  const { status: github } = useGithubStatus(owner);
+  const connectGithub = owner && github?.app.configured && !github.connected;
   const [author, setAuthor] = useState<string | null>(null);
   const [team, setTeam] = useState<string | null>(null);
   const { tools, setTools, query } = useTools();
   const { feed, error, reload, loadMore, loadingMore } = useData({ author, team, ...query });
-  const members = useMembers();
+  const { members, loaded: membersLoaded, reload: reloadMembers } = useMembers();
   const [comments, setComments] = useState<CommentView[] | null>(null);
   const [asking, setAsking] = useState<{ open: boolean; toId?: string }>({ open: false });
   const [seeding, setSeeding] = useState(false);
+  const [sampleLogins, setSampleLogins] = useSampleLogins(user.id);
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
@@ -246,13 +379,13 @@ function LeadHome({ user }: { user: User }) {
     setSeeding(true);
     try {
       const result = await api.seedDemo();
-      toast(`Sample team added. They log in with the password "${result.password}".`, {
-        description: result.logins.map((l) => `${l.name}: ${l.email}`).join("\n"),
-        duration: 12_000,
-      });
-      window.location.reload();
+      // A panel, not a toast, so the logins can't vanish before they're noted.
+      setSampleLogins({ password: result.password, logins: result.logins });
+      reload();
+      reloadMembers();
     } catch (e) {
-      toast(e instanceof api.ApiError && e.detail ? e.detail : "Couldn't add the sample team.");
+      toast(errorText(e, "Couldn't add the sample team."));
+    } finally {
       setSeeding(false);
     }
   };
@@ -261,10 +394,10 @@ function LeadHome({ user }: { user: User }) {
     setSyncing(true);
     try {
       const r = await api.syncNow();
-      toast(r.commits || r.comments ? `Found ${r.commits} new changes and ${r.comments} comments.` : "Everything is up to date.");
+      toast(r.commits || r.comments ? `Queued ${r.commits} new changes and found ${r.comments} comments.` : "Everything is up to date.");
       reload();
     } catch (e) {
-      toast(e instanceof api.ApiError && e.detail ? e.detail : "Sync didn't work. Check the repositories on the team page.");
+      toast(errorText(e, "Sync didn't work. Check the repositories on the team page."));
     } finally {
       setSyncing(false);
     }
@@ -288,14 +421,41 @@ function LeadHome({ user }: { user: User }) {
               Check GitHub now
             </Button>
           ) : null}
-          <Button variant="primary" onClick={() => setAsking({ open: true })} disabled={!messageable.length}>
+          {membersLoaded && !messageable.length && (
+            <span id="ask-unavailable" className="self-center t-small text-fg-3">
+              You can ask once someone you invited has joined.
+            </span>
+          )}
+          <Button
+            variant="primary"
+            onClick={() => setAsking({ open: true })}
+            disabled={!messageable.length}
+            aria-describedby={membersLoaded && !messageable.length ? "ask-unavailable" : undefined}
+          >
             {cmo ? "Ask a question" : "Ask your team"}
           </Button>
         </>
       }
     >
+      {sampleLogins && <SampleLoginsPanel value={sampleLogins} onDismiss={() => setSampleLogins(null)} />}
+      {connectGithub && (
+        <section aria-labelledby="connect-github-heading" className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-md bg-surface-1 p-6 shadow-elev-1">
+          <div className="max-w-[40rem] min-w-0">
+            <h2 id="connect-github-heading" className="t-heading text-fg-1">
+              Connect your GitHub to get every push explained automatically
+            </h2>
+            <p className="mt-1 t-small text-fg-2">
+              Connect once and choose your repositories, private ones included. Each push your engineers make is explained and sent to the right
+              manager. Nobody pastes links.
+            </p>
+          </div>
+          <Link href="/app/team" className={buttonStyles({ variant: "primary" })}>
+            Connect GitHub
+          </Link>
+        </section>
+      )}
       {error ? (
-        <Unavailable />
+        <Unavailable onRetry={reload} />
       ) : !feed ? (
         <Loading />
       ) : empty ? (
@@ -443,8 +603,8 @@ function LeadHome({ user }: { user: User }) {
 /* ------------------------------------------------------------------ */
 
 function ClientHome({ user }: { user: User }) {
-  const { feed, error } = useData({});
-  const members = useMembers();
+  const { feed, error, reload, loadMore, loadingMore } = useData({});
+  const { members } = useMembers();
   const [asking, setAsking] = useState(false);
   const messageable = members.filter((m) => m.canMessage && m.status === "active");
   return (
@@ -460,11 +620,14 @@ function ClientHome({ user }: { user: User }) {
       }
     >
       {error ? (
-        <Unavailable />
+        <Unavailable onRetry={reload} />
       ) : !feed ? (
         <Loading />
       ) : (
-        <FeedList items={feed.items} empty={<p className="t-body text-fg-2">No reviewed updates yet.</p>} />
+        <div className="grid gap-4">
+          <FeedList items={feed.items} empty={<p className="t-body text-fg-2">No reviewed updates yet.</p>} />
+          <LoadMore page={feed.page} shown={feed.items.length} loading={loadingMore} onMore={loadMore} />
+        </div>
       )}
       <ComposeQuestion open={asking} onOpenChange={setAsking} people={messageable} />
     </Page>

@@ -10,7 +10,8 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 
-export async function startServer() {
+/** `env` adds to (or overrides) the isolated setup, e.g. a fake GitHub for the GitHub App tests. */
+export async function startServer(env = {}) {
   if (!existsSync(path.join(root, ".next", "BUILD_ID"))) {
     throw new Error("No build found. Run `npm run build` first, then `npm test`.");
   }
@@ -28,7 +29,18 @@ export async function startServer() {
       SMTP_PASS: "",
       GEMINI_API_KEY: "",
       FALLBACK_API_KEY: "",
+      // No real GitHub App or QStash, whatever .env says.
+      GITHUB_APP_ID: "",
+      GITHUB_APP_PRIVATE_KEY: "",
+      GITHUB_APP_SLUG: "",
+      GITHUB_APP_WEBHOOK_SECRET: "",
+      GITHUB_APP_CLIENT_ID: "",
+      GITHUB_APP_CLIENT_SECRET: "",
+      QSTASH_TOKEN: "",
+      QSTASH_CURRENT_SIGNING_KEY: "",
+      QSTASH_NEXT_SIGNING_KEY: "",
       NODE_ENV: "production",
+      ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

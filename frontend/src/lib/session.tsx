@@ -5,6 +5,9 @@ import * as api from "./api";
 import type { OrgSummary, User } from "./types";
 
 const TOKEN_KEY = "rosetta:token";
+/** Saved per person on this browser; cleared on logout so the next person can't read them. */
+export const SAMPLE_LOGINS_PREFIX = "rosetta:sample-logins:";
+export const EDITS_PREFIX = "rosetta:edits:";
 
 type Status = "loading" | "anonymous" | "signed-in";
 
@@ -17,7 +20,13 @@ type SessionValue = {
   resetPassword: (token: string, password: string) => Promise<User>;
   login: (email: string, password: string) => Promise<User>;
   updateProfile: (patch: Parameters<typeof api.updateMe>[0]) => Promise<User>;
+  /** Changing the password signs out every other session, so this one keeps the new token. */
+  changePassword: (current: string, next: string) => Promise<void>;
   renameWorkspace: (name: string) => Promise<void>;
+  /** Reload the user, e.g. after GitHub sends the browser back. */
+  refreshUser: () => Promise<void>;
+  /** Forget the proven GitHub account (the username stays). */
+  unlinkGithub: () => Promise<User>;
   logout: () => void;
 };
 
@@ -38,6 +47,16 @@ const writeToken = (token: string | null) => {
     /* storage unavailable: the session lasts for this page only */
   }
 };
+/** The sample team's password and unsaved card edits stay with the person who made them. */
+const clearPersonal = () => {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith(EDITS_PREFIX) || key.startsWith("rosetta:sample-logins")) localStorage.removeItem(key);
+    }
+  } catch {
+    /* storage unavailable: nothing was saved */
+  }
+};
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -47,6 +66,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(() => {
     api.setToken(null);
     writeToken(null);
+    clearPersonal();
     setUser(null);
     setOrg(null);
     setStatus("anonymous");
@@ -92,9 +112,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setUser(next);
         return next;
       },
+      changePassword: async (current, next) => {
+        const { token } = await api.changePassword(current, next);
+        api.setToken(token);
+        writeToken(token);
+      },
       renameWorkspace: async (name) => {
         const { org: next } = await api.updateOrg({ name });
         setOrg((o) => (o ? { ...o, name: next.name } : o));
+      },
+      refreshUser: async () => {
+        const me = await api.getMe();
+        setUser(me.user);
+        setOrg(me.org);
+      },
+      unlinkGithub: async () => {
+        const next = await api.unlinkGithub();
+        setUser(next);
+        return next;
       },
       logout: signOut,
     }),
@@ -110,6 +145,9 @@ export function useSession() {
   return value;
 }
 
-/** Only same-site paths are allowed as a post-login destination. */
+/**
+ * Only same-site paths are allowed as a post-login destination. Browsers read
+ * "/\evil.com" as "//evil.com", so backslashes and control characters are refused too.
+ */
 export const safeNext = (next: string | null | undefined, fallback = "/app") =>
-  next && next.startsWith("/") && !next.startsWith("//") ? next : fallback;
+  next && next.startsWith("/") && !next.startsWith("//") && !/[\\\u0000-\u001f]/.test(next) ? next : fallback;

@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import * as api from "@/lib/api";
+import { errorText } from "@/lib/errors";
 import { isTechnical } from "@/lib/roles";
 import { langFor } from "@/lib/lang";
 import { useSession } from "@/lib/session";
 import type { Member, TicketDetail, TicketSummary } from "@/lib/types";
 import { cn, firstName, timeAgo } from "@/lib/utils";
-import { Page } from "./app-shell";
+import { LoadError, Page } from "./app-shell";
 import { Button } from "./button";
 import { ComposeQuestion } from "./compose-question";
 import { Avatar, PersonLine } from "./person";
@@ -32,11 +33,19 @@ export function QuestionsList() {
   const [composing, setComposing] = useState(false);
   const technical = user ? isTechnical(user.role) : false;
   const [tab, setTab] = useState<"received" | "sent">(technical ? "received" : "sent");
+  const [failed, setFailed] = useState(false);
 
-  useEffect(() => {
-    api.getTickets().then(setData).catch(() => setData({ received: [], sent: [] }));
-    api.getTeam().then((t) => setMembers(t.members)).catch(() => {});
+  const loadTickets = useCallback(() => {
+    setFailed(false);
+    api
+      .getTickets()
+      .then(setData)
+      .catch(() => setFailed(true));
   }, []);
+  useEffect(() => {
+    loadTickets();
+    api.getTeam().then((t) => setMembers(t.members)).catch(() => {});
+  }, [loadTickets]);
 
   const messageable = useMemo(() => members.filter((m) => m.canMessage && m.status === "active"), [members]);
   const list = data?.[tab] ?? [];
@@ -57,15 +66,14 @@ export function QuestionsList() {
         ) : null
       }
     >
-      <div role="tablist" aria-label="Questions" className="inline-grid grid-cols-2 rounded-sm bg-surface-2 p-1 shadow-ring">
+      <div role="group" aria-label="Show questions" className="inline-grid grid-cols-2 rounded-sm bg-surface-2 p-1 shadow-ring">
         {(["received", "sent"] as const).map((t) => {
           const count = data?.[t].filter((x) => x.unread).length ?? 0;
           return (
             <button
               key={t}
               type="button"
-              role="tab"
-              aria-selected={tab === t}
+              aria-pressed={tab === t}
               onClick={() => setTab(t)}
               className={cn(
                 "press inline-flex h-9 items-center gap-2 rounded-full px-4 t-small font-medium",
@@ -73,14 +81,21 @@ export function QuestionsList() {
               )}
             >
               {t === "received" ? "Asked of me" : "I asked"}
-              {count > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1.5 t-micro font-semibold text-accent-fg">{count}</span>}
+              {count > 0 && (
+                <span className="grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1.5 t-micro font-semibold text-accent-fg">
+                  {count}
+                  <span className="sr-only"> unread</span>
+                </span>
+              )}
             </button>
           );
         })}
       </div>
 
       <div className="mt-6">
-        {!data ? (
+        {failed && !data ? (
+          <LoadError message="Your questions can't load right now." onRetry={loadTickets} />
+        ) : !data ? (
           <p className="t-body text-fg-3">Loading…</p>
         ) : list.length === 0 ? (
           <div className="rounded-md p-8 shadow-ring">
@@ -131,20 +146,57 @@ export function QuestionsList() {
 /** One conversation. */
 export function QuestionThread({ id }: { id: string }) {
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<"missing" | "error" | null>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const { user } = useSession();
   const [original, setOriginal] = useState<Set<string>>(new Set());
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let current = true;
+    setFailed(null);
     api
       .getTicket(id)
-      .then((r) => setTicket(r.ticket))
-      .catch(() => setFailed(true));
+      .then((r) => current && setTicket(r.ticket))
+      .catch((e) => {
+        if (!current) return;
+        const missing = e instanceof api.ApiError && (e.code === "not_found" || e.code === "forbidden");
+        setFailed(missing ? "missing" : "error");
+      });
+    return () => {
+      current = false;
+    };
+  }, [id, attempt]);
+
+  // Replies arrive without a reload: check every 20 s while the tab is visible, and on return to it.
+  useEffect(() => {
+    let current = true;
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      api
+        .getTicket(id)
+        .then((r) => current && setTicket(r.ticket))
+        .catch(() => {});
+    };
+    const timer = window.setInterval(refresh, 20_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [id]);
 
-  if (failed) {
+  if (failed === "error" && !ticket) {
+    return (
+      <Page title="Question">
+        <LoadError message="This question can't load right now." onRetry={() => setAttempt((n) => n + 1)} />
+      </Page>
+    );
+  }
+  if (failed === "missing") {
     return (
       <Page title="This question isn't available.">
         <Link href="/app/questions" className="t-body text-fg-1 underline underline-offset-4">
@@ -163,14 +215,21 @@ export function QuestionThread({ id }: { id: string }) {
     try {
       setTicket((await api.replyTicket(ticket.id, text.trim())).ticket);
       setText("");
-    } catch {
-      toast("That reply didn't send. Try again in a minute.");
+    } catch (e) {
+      toast(errorText(e, "That reply didn't send. Try again in a minute."));
     } finally {
       setSending(false);
     }
   };
   const toggle = async () => {
-    setTicket((await api.setTicketStatus(ticket.id, ticket.status === "closed" ? "open" : "closed")).ticket);
+    setToggling(true);
+    try {
+      setTicket((await api.setTicketStatus(ticket.id, ticket.status === "closed" ? "open" : "closed")).ticket);
+    } catch (e) {
+      toast(errorText(e, ticket.status === "closed" ? "Couldn't reopen it. Try again in a minute." : "Couldn't close it. Try again in a minute."));
+    } finally {
+      setToggling(false);
+    }
   };
 
   return (
@@ -185,7 +244,7 @@ export function QuestionThread({ id }: { id: string }) {
       actions={
         <>
           <StatusChip status={ticket.status} />
-          <Button variant="ghost" onClick={toggle}>
+          <Button variant="ghost" onClick={toggle} loading={toggling}>
             {ticket.status === "closed" ? "Reopen" : "Close question"}
           </Button>
         </>

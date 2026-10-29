@@ -52,13 +52,34 @@ function corsHeaders(req: Request): Record<string, string> {
   };
 }
 
+// Fallback wording for schemas without their own message, so Zod's
+// developer text ("Too small: expected string…") never reaches people.
+z.config({
+  customError: (issue) => {
+    switch (issue.code) {
+      case "too_small":
+        return issue.origin === "string" && issue.minimum === 1 ? "Please fill in every required field." : "Something you entered is too short.";
+      case "too_big":
+        return "Something you entered is too long.";
+      case "unrecognized_keys":
+        return "That request had fields Rosetta doesn't accept.";
+      case "invalid_value":
+        return "Pick one of the options offered.";
+      default:
+        return "Something in that request isn't valid. Check it and try again.";
+    }
+  },
+});
+
 export const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 
 function errorResponse(error: unknown) {
   if (error instanceof ApiError) return json({ code: error.code, message: error.message }, error.status);
   if (error instanceof z.ZodError) {
-    return json({ code: "bad_request", message: z.prettifyError(error) }, 400);
+    // Our own messages are written for people; drop Zod's "→ at <path>" detail.
+    const messages = [...new Set(error.issues.map((i) => i.message))];
+    return json({ code: "bad_request", message: messages.join(" ") }, 400);
   }
   console.error("[rosetta] unhandled error", error);
   return json({ code: "unavailable" }, 503);
@@ -91,7 +112,8 @@ export async function readJson<T>(req: Request, schema: z.ZodType<T>): Promise<T
 
 /**
  * Streams NDJSON lines, then `{ type: "card", card }` with whatever `run`
- * returns. Errors after the stream opens become `{ type: "error", code }`.
+ * returns. Errors after the stream opens become `{ type: "error", code, message? }`,
+ * with the message only when the route wrote one for people to read.
  */
 export function ndjson(run: (emit: (line: object) => void) => Promise<object>) {
   const encoder = new TextEncoder();
@@ -102,7 +124,8 @@ export function ndjson(run: (emit: (line: object) => void) => Promise<object>) {
         emit({ type: "card", card: await run(emit) });
       } catch (error) {
         if (!(error instanceof ApiError)) console.error("[rosetta] stream error", error);
-        emit({ type: "error", code: error instanceof ApiError ? error.code : "unavailable" });
+        const known = error instanceof ApiError;
+        emit({ type: "error", code: known ? error.code : "unavailable", ...(known && error.message !== error.code ? { message: error.message } : {}) });
       }
       controller.close();
     },

@@ -60,7 +60,7 @@ export function ForgotForm() {
         <form noValidate onSubmit={onSubmit} className="grid gap-5 rounded-md bg-surface-1 p-6 shadow-elev-1 sm:p-8">
           <Field label="Email" name="email" required type="email" autoComplete="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
           {error && (
-            <p role="alert" className="t-small font-medium text-fg-1">
+            <p role="alert" className="t-small font-medium text-danger">
               {error}
             </p>
           )}
@@ -114,7 +114,7 @@ export function ResetForm() {
         <Field label="New password" name="password" required type="password" autoComplete="new-password" hint="At least 8 characters." value={password} onChange={(e) => setPassword(e.target.value)} />
         <Field label="Type it again" name="confirm" required type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
         {error && (
-          <p role="alert" className="t-small font-medium whitespace-pre-line text-fg-1">
+          <p role="alert" className="t-small font-medium whitespace-pre-line text-danger">
             {error}{" "}
             {/expired|valid/i.test(error) && (
               <Link href="/forgot" className="underline underline-offset-4">

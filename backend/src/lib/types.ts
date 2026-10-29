@@ -124,6 +124,12 @@ export type User = {
   title?: string;
   /** Maps GitHub commits and comments to this person. */
   githubLogin?: string;
+  /** Set by "Link your GitHub account" (GitHub login), with the account's numeric id. */
+  githubId?: number;
+  /** True when githubLogin was proven by logging in to GitHub, not typed in. */
+  githubVerified?: boolean;
+  /** Email when a change of someone you manage arrives from a push. On unless turned off. */
+  notifyEmailOnPush?: boolean;
   focus: Focus[];
   language: "en" | "hinglish";
   status: "active" | "invited";
@@ -137,7 +143,8 @@ export type User = {
   updatedAt: string;
 };
 
-export type StoredUser = User & { passwordHash?: string; inviteCode?: string };
+/** `sessionVersion` is bumped to log out every existing session. Missing means 0. */
+export type StoredUser = User & { passwordHash?: string; inviteCode?: string; sessionVersion?: number };
 
 export type Org = {
   id: string;
@@ -147,6 +154,26 @@ export type Org = {
   repos: string[];
   webhookSecret: string;
   lastSyncAt?: string;
+  /** Where the next sync reads from, when work was left over; lastSyncAt when missing. */
+  syncCursor?: string;
+  /** Set while a sync runs, so other server instances don't start a second one. */
+  syncingUntil?: string;
+  /** The week (its Monday, YYYY-MM-DD in IST) whose report was last emailed. */
+  weeklyReportFor?: string;
+  /**
+   * The Rosetta GitHub App installation this workspace is connected to (a
+   * string, so orgs can be looked up by it), and the GitHub account it's on.
+   */
+  githubInstallationId?: string;
+  githubAccount?: string;
+  githubConnectedAt?: string;
+  /** Branches to explain, per repo. Missing or empty: the repo's default branch only. */
+  branches?: Record<string, string[]>;
+  /** GitHub usernames and commit emails (lower case) a lead assigned to a member. */
+  githubAliases?: Record<string, string>;
+  /** When the GitHub App last sent this workspace an event, and which. */
+  lastWebhookAt?: string;
+  lastWebhookEvent?: string;
   createdAt: string;
 };
 
@@ -159,7 +186,8 @@ export type StoredCard = Card & {
   reading: string;
   findings: string[];
   createdBy?: string;
-  source: "manual" | "sync" | "webhook" | "demo";
+  /** "push": arrived through the GitHub App; "webhook": the older per-workspace webhook. */
+  source: "manual" | "sync" | "webhook" | "push" | "demo";
   createdAt: string;
   approvedAt?: string;
   /** How many times readers reported a mistake in this explanation. */

@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/auth";
 import { ApiError, json, preflight, route } from "@/lib/http";
-import { canSeeCard, isTechnical, orgMembers, personOf, requireOrg } from "@/lib/org";
+import { canSeeCard, cardOwner, isTechnical, orgMembers, personOf, requireOrg } from "@/lib/org";
 import { store } from "@/lib/store";
 import type { Comment, Risk, StoredCard, Ticket } from "@/lib/types";
 
@@ -36,11 +36,11 @@ export const GET = route(async (req) => {
   const visible = cards.filter((c) => canSeeCard(me, c, users));
   const changes = visible.filter((c) => inWeek(c.committedAt));
   const ids = new Set(visible.map((c) => c.id));
-  const owner = (c: StoredCard) => c.authorUserId ?? c.createdBy ?? "";
+  const owner = (c: StoredCard) => cardOwner(c) ?? "";
 
   const reviewed = changes.filter((c) => c.status === "approved");
   const risky = changes.filter((c) => c.explanation.risk !== "low");
-  const flagged = changes.filter((c) => c.explanation.verification?.needsReview && c.status !== "approved");
+  const flagged = changes.filter((c) => (c.explanation.verification?.needsReview || c.explanation.verification?.checkedBy === "code") && c.status !== "approved");
   const reported = changes.filter((c) => (c.reports ?? 0) > 0);
   const myTickets = tickets.filter((t) => t.fromId === me.id || t.toId === me.id);
   const asked = myTickets.filter((t) => inWeek(t.createdAt));

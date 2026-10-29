@@ -5,11 +5,24 @@ export type ParsedLink =
 const LINK =
   /^(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/(commit|pull)\/([0-9a-f]{7,40}|\d+)(?:[/?#].*)?$/i;
 
+/**
+ * Names GitHub allows: an owner of up to 39 letters, digits, `_` or `-`, and a
+ * repo of up to 100 letters, digits, `.`, `_` or `-` that isn't `.` or `..`.
+ */
+const OWNER = /^[\w-]{1,39}$/;
+const REPO = /^[\w.-]{1,100}$/;
+
+export const isRepoName = (fullName: string) => {
+  const [owner, repo, ...rest] = fullName.split("/");
+  return !rest.length && OWNER.test(owner ?? "") && REPO.test(repo ?? "") && repo !== "." && repo !== "..";
+};
+
 /** Accepts commit and pull request links (FR-1.1). */
 export function parseGitHubLink(input: string): ParsedLink | null {
   const match = input.trim().match(LINK);
   if (!match) return null;
   const [, owner, repo, kind, id] = match;
+  if (!isRepoName(`${owner}/${repo}`)) return null;
   if (kind.toLowerCase() === "commit") {
     if (!/^[0-9a-f]{7,40}$/i.test(id)) return null;
     return { owner, repo, kind: "commit", sha: id.toLowerCase() };

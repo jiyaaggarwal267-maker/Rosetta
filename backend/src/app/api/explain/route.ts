@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
-import { cardIdFor, demoSampleFor, publicCard } from "@/lib/cards";
+import { demoSampleFor, publicCard, resolveCardId } from "@/lib/cards";
 import { fetchChange, type Change } from "@/lib/github";
 import { parseGitHubLink } from "@/lib/github-url";
 import { ApiError, ndjson, pause, preflight, readJson, route } from "@/lib/http";
 import { isPitchLink } from "@/lib/demo/pitch";
 import { explainPitch } from "@/lib/demo/pitch-card";
 import { explanationFor, prepare, toCard, type Stage } from "@/lib/ingest";
-import { orgMembers, requireOrg } from "@/lib/org";
+import { canReview, canSeeCard, isTechnical, orgMembers, requireOrg } from "@/lib/org";
+import { limit } from "@/lib/ratelimit";
 import { store } from "@/lib/store";
 import type { StoredCard } from "@/lib/types";
 
@@ -26,17 +27,34 @@ export const POST = route(async (req) => {
   const link = parseGitHubLink(url);
   if (!link) throw new ApiError("invalid_url");
   const users = await orgMembers(org.id);
-  const id = cardIdFor(org.id, link);
+  const id = await resolveCardId(org.id, link);
   const repo = `${link.owner}/${link.repo}`;
+  const existing = await store.get<StoredCard>("cards", id);
+  const pitch = isPitchLink(link);
+  // A pitch card nobody in the workspace wrote yet (a lead rehearsed it) is claimed by the first engineer to paste it.
+  const claimable = pitch && !!existing && !existing.authorUserId && isTechnical(me.role);
+  // Already in this workspace but not theirs to read (a draft, another team's work): don't show it.
+  if (existing && !claimable && !canSeeCard(me, existing, users)) throw new ApiError("not_found", "You don't have access to this change.");
   // Pasting a deleted change brings it back.
   await store.remove("deleted", id);
 
-  // The pitch commit: always explained afresh, the same way, with no GitHub or AI calls.
-  if (isPitchLink(link)) return ndjson((emit) => explainPitch(id, org, me, users, emit));
+  // Only whoever explained it (or its author) regenerates it; anyone else just reads it.
+  const someoneElses = !!existing && !claimable && !canReview(me, existing) && existing.createdBy !== me.id;
+  // The pitch commit: explained afresh, the same way, with no GitHub or AI calls.
+  if (pitch && !someoneElses) {
+    return ndjson((emit) => explainPitch(id, org, me, users, emit));
+  }
+
+  // A pull request that got new pushes since it was explained is explained again
+  // (which resets its review), so only by its author or whoever explained it.
+  let pushed: Change | undefined;
+  if (existing && !someoneElses && !pitch && link.kind === "pull") {
+    pushed = await fetchChange(link, org.id).catch(() => undefined);
+    if (pushed?.headSha === existing.headSha) pushed = undefined;
+  }
 
   // Already explained in this workspace: replay the story, no GitHub or model calls.
-  const existing = await store.get<StoredCard>("cards", id);
-  if (existing) {
+  if (existing && !pushed) {
     return ndjson(async (emit) => {
       emit({ type: "start", title: existing.reading });
       for (const text of existing.findings) {
@@ -46,11 +64,12 @@ export const POST = route(async (req) => {
       return publicCard(existing, me, users);
     });
   }
+  limit(`explain:${me.id}`, 30, 60 * 60_000);
 
   const demo = link.kind === "commit" ? demoSampleFor(repo, link.sha) : undefined;
   let change: Change;
   try {
-    change = await fetchChange(link);
+    change = pushed ?? (await fetchChange(link, org.id));
   } catch (error) {
     // Demo commits still work with no Wi-Fi or GitHub.
     if (!demo) throw error;
@@ -88,7 +107,7 @@ export const POST = route(async (req) => {
     const explanationPromise = explanationFor(prepared, (stage) => {
       if (writing) emit({ type: stage });
       else pending = stage;
-    });
+    }, org.id);
     explanationPromise.catch(() => {});
     for (const text of prepared.findings) {
       await pause(FINDING_GAP_MS);
@@ -97,8 +116,16 @@ export const POST = route(async (req) => {
     emit({ type: "writing" });
     writing = true;
     if (pending) emit({ type: pending });
-    const card = toCard(id, org, prepared, await explanationPromise, users, { createdBy: me.id, source: "manual" });
-    await store.set("cards", id, card);
-    return publicCard(card, me, users);
+    // A pull request explained again stays the same card: same creator, age and reports.
+    const card = toCard(id, org, prepared, await explanationPromise, users, existing ? { createdBy: existing.createdBy, source: existing.source } : { createdBy: me.id, source: "manual" });
+    // Someone else may have explained (and even reviewed) this exact change meanwhile: keep theirs.
+    const latest = await store.get<StoredCard>("cards", id);
+    if (latest && latest.headSha === card.headSha) {
+      if (!canSeeCard(me, latest, users)) throw new ApiError("not_found", "You don't have access to this change.");
+      return publicCard(latest, me, users);
+    }
+    const next: StoredCard = latest ? { ...card, createdAt: latest.createdAt, ...(latest.reports ? { reports: latest.reports } : {}) } : card;
+    await store.set("cards", id, next);
+    return publicCard(next, me, users);
   });
 });

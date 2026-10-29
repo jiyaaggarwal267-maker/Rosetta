@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { ApiError, json, preflight, readJson, route } from "@/lib/http";
 import { sendReport } from "@/lib/mail";
 import { notifications } from "@/lib/notify";
-import { canSeeCard, orgMembers } from "@/lib/org";
+import { canSeeCard, cardOwner, orgMembers } from "@/lib/org";
 import { limit } from "@/lib/ratelimit";
 import { store } from "@/lib/store";
 import { ticketView } from "@/lib/tickets";
@@ -24,6 +24,10 @@ const body = z.object({
 
 const newId = (p: string) => `${p}_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
+/** Only a step this card really has a label for (never "__proto__" or other junk); otherwise the whole card. */
+const knownKey = (card: StoredCard, key = "") =>
+  key && Object.values(card.explanation.levels).some((l) => l?.labels && Object.hasOwn(l.labels, key)) ? key : "";
+
 /**
  * POST /api/cards/:id/report { text, nodeKey? }: anyone who can read a card
  * tells its author the explanation looks wrong. It arrives as a question in
@@ -36,7 +40,7 @@ export const POST = route<Ctx>(async (req, { params }) => {
   const users = await orgMembers(me.orgId);
   const card = await store.get<StoredCard>("cards", id);
   if (!card || !canSeeCard(me, card, users)) throw new ApiError("not_found");
-  const author = users.find((u) => u.id === (card.authorUserId ?? card.createdBy));
+  const author = users.find((u) => u.id === cardOwner(card));
   if (!author) throw new ApiError("bad_request", "Nobody in this workspace wrote this change, so there's no one to tell.");
   if (author.id === me.id) throw new ApiError("bad_request", "This is your change. Edit the text, or use Explain again.");
   limit(`report:${me.id}`, 10, 60 * 60_000);
@@ -49,7 +53,7 @@ export const POST = route<Ctx>(async (req, { params }) => {
     toId: author.id,
     subject: `Possible mistake: ${card.explanation.title}`.slice(0, 120),
     kind: "report",
-    context: { cardId: card.id, nodeKey: input.nodeKey ?? "" },
+    context: { cardId: card.id, nodeKey: knownKey(card, input.nodeKey) },
     status: "open",
     messages: [{ id: newId("tm"), authorId: me.id, createdAt: now, text: input.text }],
     unreadBy: [author.id],
@@ -57,7 +61,9 @@ export const POST = route<Ctx>(async (req, { params }) => {
     updatedAt: now,
   };
   await store.set("tickets", ticket.id, ticket);
-  await store.set("cards", card.id, { ...card, reports: (card.reports ?? 0) + 1 });
+  // Count on the latest copy, so a review or edit made meanwhile isn't undone.
+  const latest = await store.get<StoredCard>("cards", card.id);
+  if (latest) await store.set("cards", card.id, { ...latest, reports: (latest.reports ?? 0) + 1 });
   after(() => translateTicketMessageLater(ticket.id, ticket.messages[0].id, me.name, card.explanation.title));
   after(() => notifications.report({ orgId: me.orgId, to: author.id, fromName: me.name, title: card.explanation.title, ticketId: ticket.id }));
   after(() => sendReport({ to: author.email, toName: author.name, fromName: me.name, title: card.explanation.title, text: input.text, ticketId: ticket.id }));

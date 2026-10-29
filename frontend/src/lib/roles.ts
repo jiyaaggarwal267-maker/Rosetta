@@ -54,6 +54,9 @@ export function tabsFor(role: Role): { href: string; label: string }[] {
   ];
 }
 
+/** A section page is open to a role only when it is one of that role's tabs. */
+export const canOpen = (role: Role, href: string) => tabsFor(role).some((t) => t.href === href);
+
 export const FOCUS_OPTIONS: { key: Focus; label: string }[] = [
   { key: "timelines", label: "Timelines" },
   { key: "cost", label: "Cost" },

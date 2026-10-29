@@ -8,6 +8,7 @@ import { tabsFor } from "@/lib/roles";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { AccountNav } from "./account-nav";
+import { Button } from "./button";
 import { Logo } from "./logo";
 import { NotificationBell } from "./notification-bell";
 import { SiteFooter } from "./site-footer";
@@ -92,6 +93,34 @@ export function AppShell({ children }: { children: ReactNode }) {
       {children}
       <SiteFooter />
     </>
+  );
+}
+
+/** Shown on a section that isn't one of the reader's tabs (see tabsFor). */
+export function NotForRole({ title }: { title: string }) {
+  return (
+    <Page title={title}>
+      <div className="grid max-w-(--w-read) justify-items-start gap-4 rounded-md p-8 shadow-ring">
+        <p className="t-body font-medium text-fg-1">This page isn&rsquo;t part of your view.</p>
+        <p className="t-small text-fg-2">Your role sees different sections. Everything meant for you is in the tabs above.</p>
+        <Link href="/app" className="t-small font-medium text-fg-1 underline underline-offset-4">
+          Go to your home page
+        </Link>
+      </div>
+    </Page>
+  );
+}
+
+/** A failed load, with a way to try again. Never an empty state. */
+export function LoadError({ message = "This didn't load.", onRetry }: { message?: string; onRetry: () => void }) {
+  return (
+    <div className="grid justify-items-start gap-3 rounded-md p-8 shadow-ring">
+      <p role="alert" className="t-body font-medium text-danger">
+        {message}
+      </p>
+      <p className="t-small text-fg-2">Check your connection, then try again. If it keeps happening, try again in a few minutes.</p>
+      <Button onClick={onRetry}>Try again</Button>
+    </div>
   );
 }
 

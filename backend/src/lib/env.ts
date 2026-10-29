@@ -1,6 +1,30 @@
 /** All configuration in one place. Everything is optional in development. */
 export const env = {
   githubToken: process.env.GITHUB_TOKEN || "",
+  /** GitHub's API and website. Only tests point these elsewhere (a local fake GitHub). */
+  githubApiUrl: (process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/$/, ""),
+  githubWebUrl: (process.env.GITHUB_WEB_URL || "https://github.com").replace(/\/$/, ""),
+
+  /**
+   * The Rosetta GitHub App: a company installs it once on its repos (private
+   * ones too) and every push arrives by itself. The private key is the PEM
+   * GitHub gives you, pasted with literal \n for line breaks.
+   */
+  githubAppId: process.env.GITHUB_APP_ID || "",
+  githubAppPrivateKey: (process.env.GITHUB_APP_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
+  githubAppSlug: process.env.GITHUB_APP_SLUG || "",
+  githubAppWebhookSecret: process.env.GITHUB_APP_WEBHOOK_SECRET || "",
+  /** The App's OAuth client, for "Link your GitHub account" (and confirming who installed it). */
+  githubAppClientId: process.env.GITHUB_APP_CLIENT_ID || "",
+  githubAppClientSecret: process.env.GITHUB_APP_CLIENT_SECRET || "",
+
+  /** Upstash QStash: runs the explain queue in its own function call. Optional; without it the webhook's after() runs it. */
+  qstashToken: process.env.QSTASH_TOKEN || "",
+  qstashUrl: (process.env.QSTASH_URL || "https://qstash.upstash.io").replace(/\/$/, ""),
+  qstashCurrentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY || "",
+  qstashNextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY || "",
+  /** This backend's public address, for QStash to call back. Taken from the request when unset. */
+  publicApiUrl: (process.env.PUBLIC_API_URL || "").replace(/\/$/, ""),
 
   geminiKey: process.env.GEMINI_API_KEY || "",
   geminiModel: process.env.GEMINI_MODEL || "gemini-3.8-flash",

@@ -21,9 +21,12 @@ export const POST = route(async (req) => {
   const missing = requireTerms(acceptTerms);
   if (missing) throw new ApiError("terms_required", missing);
   const id = userIdFor(profile.email);
-  if (await store.get<StoredUser>("users", id)) {
-    throw new ApiError("conflict", "An account with this email already exists. Log in instead.");
-  }
+  await assertEmailFree(id);
+  const passwordHash = await hashPassword(password);
+  // Checked again after the slow hash: two signups with one email would otherwise both create a workspace.
+  await assertEmailFree(id);
+  // Each workspace gets its own share of the AI quota, so one address can't open many a day.
+  limit(`signup-day:${clientIp(req)}`, 3, 24 * 60 * 60_000);
   const now = new Date().toISOString();
   const org: Org = {
     id: `o_${randomBytes(6).toString("hex")}`,
@@ -39,11 +42,25 @@ export const POST = route(async (req) => {
     orgId: org.id,
     status: "active",
     ...acceptance(marketingOptIn),
-    passwordHash: await hashPassword(password),
+    passwordHash,
     createdAt: now,
     updatedAt: now,
   };
   await store.set("orgs", org.id, org);
   await store.set("users", id, user);
-  return json({ token: issueToken(id), user: publicUser(user), org: { id: org.id, name: org.name } }, 201);
+  return json({ token: issueToken(user), user: publicUser(user), org: { id: org.id, name: org.name } }, 201);
 });
+
+async function assertEmailFree(id: string) {
+  const existing = await store.get<StoredUser>("users", id);
+  if (!existing) return;
+  // Added by a lead but not joined yet. Signing up must not take the account over
+  // without proof of the email, so point them at the invite (Forgot password sends it again).
+  if (existing.status === "invited") {
+    throw new ApiError(
+      "conflict",
+      "This email has been invited to a workspace. Use the link in your invite email, or use Forgot password to get it sent again.",
+    );
+  }
+  throw new ApiError("conflict", "An account with this email already exists. Log in instead.");
+}

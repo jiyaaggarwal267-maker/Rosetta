@@ -1,8 +1,8 @@
-import { cardIdFor } from "./cards";
+import { resolveCardId } from "./cards";
 import { PITCH, pitchExplanation } from "./demo/pitch";
 import { SAMPLES } from "./demo/samples";
 import { env } from "./env";
-import { isTechnical } from "./org";
+import { cardOwner, isTechnical } from "./org";
 import { buildReport, type ReportItem, type ReportSection } from "./report";
 import { store } from "./store";
 import type { Org, StoredCard, User } from "./types";
@@ -10,7 +10,7 @@ import type { Org, StoredCard, User } from "./types";
 const DAY = 86_400_000;
 export const WEEK = 7 * DAY;
 
-const owner = (c: StoredCard) => c.authorUserId ?? c.createdBy ?? "";
+const owner = (c: StoredCard) => cardOwner(c) ?? "";
 
 /** One engineer's real week: their changes from the last 7 days, oldest first. */
 export function realItems(cards: StoredCard[], engineerId: string, now = Date.now()): ReportItem[] {
@@ -27,7 +27,7 @@ export function realItems(cards: StoredCard[], engineerId: string, now = Date.no
 export async function sampleItems(org: Org, now = Date.now()): Promise<ReportItem[]> {
   const link = async (repo: string, sha: string) => {
     const [o, r] = repo.split("/");
-    const id = cardIdFor(org.id, { owner: o, repo: r, kind: "commit", sha });
+    const id = await resolveCardId(org.id, { owner: o, repo: r, kind: "commit", sha });
     return (await store.get<StoredCard>("cards", id)) ? `/app/c/${id}` : undefined;
   };
   const byKey = Object.fromEntries(SAMPLES.map((s) => [s.key, s]));

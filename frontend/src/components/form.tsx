@@ -25,7 +25,7 @@ export function Field({ label, hint, error, optional, id, className, ref, ...pro
       </label>
       <input ref={ref} id={inputId} aria-invalid={error ? true : undefined} aria-describedby={describedBy} className={inputClass} {...props} />
       {error ? (
-        <p id={`${inputId}-error`} className="t-small font-medium text-fg-1">
+        <p id={`${inputId}-error`} className="t-small font-medium text-danger">
           {error}
         </p>
       ) : (

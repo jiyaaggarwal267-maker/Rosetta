@@ -36,7 +36,8 @@ npm run migrate -- --write   # copies; documents already in Firestore are kept
 | `SMTP_USER` · `SMTP_PASS` | Gmail address and an app password (optional; without it, no emails) |
 | `ALLOWED_ORIGINS` | The frontend's URL, e.g. `https://rosetta.vercel.app` (fill in after step 3) |
 | `APP_URL` | The same frontend URL |
-| `CRON_SECRET` | Any long random string. Turns on the Monday weekly report email to each workspace owner (`vercel.json`) |
+| `CRON_SECRET` | Any long random string. Turns on the Monday weekly report email to each workspace owner and the daily run of the explain queue (`vercel.json`) |
+| `GITHUB_APP_*` · `QSTASH_*` | The GitHub App, so pushes arrive by themselves: see step 4 |
 
 3. Deploy, then open `https://<backend>/api/health`. `store` should say `firestore`, and `warnings` should be empty once step 3 is done.
 
@@ -54,13 +55,75 @@ Long requests (explaining, checking and rewriting a commit) are allowed up to 30
 
 3. Deploy. Then go back to the backend, set `ALLOWED_ORIGINS` and `APP_URL` to this URL, and redeploy the backend.
 
-## 4. GitHub webhook (changes arrive instantly)
+## 4. Create the GitHub App (pushes arrive by themselves, private repos too)
 
-In Rosetta, open **Organisation** (or **My team**), add the repositories to watch, then open **Get changes instantly with a GitHub webhook**. In each repository on GitHub: **Settings → Webhooks → Add webhook**, paste the payload URL and secret shown there, content type `application/json`, events: pushes, commit comments, issue comments.
+One GitHub App serves every workspace. A company's owner presses **Connect GitHub** once, installs it on their repos (private ones too), picks which to watch, and from then on every `git push` to a watched branch is explained and lands with the right manager. No webhook per repo, no personal token, no links to paste.
 
-Without a webhook, **Check GitHub now** and the automatic 5-minute sync still bring changes in.
+1. On GitHub: **Settings → Developer settings → GitHub Apps → New GitHub App** (to own it as an organisation: the organisation's **Settings → Developer settings → GitHub Apps**).
+2. Fill in, with `<backend>` your backend's URL, e.g. `https://rosetta-api.vercel.app`:
 
-## 5. A demo workspace for judges
+| Field | Value |
+| --- | --- |
+| GitHub App name | e.g. `Rosetta for Acme`. Its URL name (shown after saving, `github.com/apps/<slug>`) is `GITHUB_APP_SLUG` |
+| Homepage URL | The frontend's URL |
+| Callback URL | `<backend>/api/github/link/callback` |
+| Expire user authorization tokens | On (Rosetta uses the user token once and never stores it) |
+| Request user authorization (OAuth) during installation | **Off** |
+| Setup URL | `<backend>/api/github/callback` |
+| Redirect on update | **On** |
+| Webhook: Active | On |
+| Webhook URL | `<backend>/api/webhooks/github-app` |
+| Webhook secret | A long random string (`openssl rand -hex 32`). The same value goes in `GITHUB_APP_WEBHOOK_SECRET` |
+
+3. **Permissions → Repository permissions**:
+   - **Contents: Read-only** (commits and their diffs)
+   - **Metadata: Read-only** (required by GitHub)
+   - **Pull requests: Read-only** (pasted pull request links, review comments)
+   - **Issues: Read-only**, optional: only for issue and pull request comments
+
+   Nothing else, and no account permissions.
+4. **Subscribe to events**: **Push**, **Commit comment**, **Issue comment** (and **Pull request review comment** if you want those comments too). Installation events (`installation`, `installation_repositories`) are always sent to GitHub Apps; there's nothing to tick.
+5. **Where can this GitHub App be installed?** **Any account**, so other companies can install it. Create the App.
+6. On the App's page: note the **App ID** and the **Client ID**, press **Generate a new client secret**, and under **Private keys** press **Generate a private key** (a `.pem` file downloads).
+7. Backend environment variables, then redeploy:
+
+| Variable | Value |
+| --- | --- |
+| `GITHUB_APP_ID` | The App ID |
+| `GITHUB_APP_SLUG` | The URL name from `github.com/apps/<slug>` |
+| `GITHUB_APP_PRIVATE_KEY` | The whole `.pem` file. On Vercel paste it as is; in a `.env` file put it on one line with `\n` for each line break |
+| `GITHUB_APP_WEBHOOK_SECRET` | The webhook secret from step 2 |
+| `GITHUB_APP_CLIENT_ID` · `GITHUB_APP_CLIENT_SECRET` | The Client ID and client secret. They let people **Link your GitHub account** (so their pushes are matched to them for sure), and let Rosetta confirm that whoever connects an installation can see it on GitHub. Without them, an installation is accepted only within an hour of being made |
+
+8. In Rosetta, the owner opens **My team**, presses **Connect GitHub**, installs the App, and ticks the repos to watch. The GitHub panel (`GET /api/github/status`) shows the last event received and the explain queue.
+
+**Branches.** Only each repo's default branch is explained, unless the owner lists branches for it (`PATCH /api/org { branches: { "owner/repo": ["main", "release"] } }`). Branch deletions and tags are ignored. Commits by bots (`…[bot]`), merge commits, `style:` commits and commits that only touch lockfiles are recorded as skipped and cost nothing.
+
+**Whose push is it?** In order: the GitHub account someone linked (by id, then username), a GitHub username typed on their profile, their Rosetta email as the commit email, then a lead's assignment. Commits nobody matches wait under **Unassigned commits** (no AI spent) until a lead says whose they are; later pushes by that username or email go to that person directly.
+
+**The explain queue.** Every pushed commit becomes one job (deduplicated, so a re-delivered push or the same commit on two branches is explained once). The webhook answers GitHub at once, then the queue runs:
+
+- with **QStash** (optional, recommended on Vercel): set `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY` from the [Upstash console](https://console.upstash.com/qstash) (and `PUBLIC_API_URL=<backend>` if the backend has several domains). Each push publishes one message to `POST /api/jobs/run`, checked with the `Upstash-Signature` header.
+- without it, the webhook request runs the queue after answering (up to 300 s).
+- either way, feed loads give the queue a turn (at most once a minute per workspace), and a daily Vercel cron (`GET /api/jobs/run`, 04:00 UTC, needs `CRON_SECRET`) runs whatever is left. Vercel Hobby allows only daily crons, which is why it isn't more often.
+
+A failed commit is retried twice more (1 and 2 minutes later), then listed under failures with the reason. When the workspace's AI quota is used up, commits wait for the quota's reset instead of failing.
+
+**Test it locally.** GitHub can't reach `localhost`, so relay the webhook with [smee.io](https://smee.io): open smee.io, press **Start a new channel**, set that URL as the Webhook URL of a separate test App, then run
+
+```bash
+npx smee-client --url https://smee.io/<channel> --target http://localhost:4000/api/webhooks/github-app
+```
+
+The Setup and Callback URLs are opened by your own browser, so a local test App can use `http://localhost:4000/api/github/callback` and `http://localhost:4000/api/github/link/callback`.
+
+## 5. Older option: a webhook per repository
+
+Kept for workspaces set up before the GitHub App (public repos only). In Rosetta, open **Organisation** (or **My team**), add the repositories to watch, then open **Get changes instantly with a GitHub webhook**. In each repository on GitHub: **Settings → Webhooks → Add webhook**, paste the payload URL and secret shown there, content type `application/json`, events: pushes, commit comments, issue comments. It feeds the same queue as the App.
+
+Without either, **Check GitHub now** and the automatic 5-minute sync still bring changes in (public repos, or private ones once the App is connected).
+
+## 6. A demo workspace for judges
 
 ```bash
 cd backend

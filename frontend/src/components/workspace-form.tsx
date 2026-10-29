@@ -75,7 +75,7 @@ export function WorkspaceForm() {
       const code = err instanceof ApiError ? err.code : "unavailable";
       if (code === "conflict") setErrors({ email: "An account with this email already exists. Log in instead." });
       else if (code === "terms_required") setErrors({ terms: "Tick the box to agree to the Terms and confirm you've read the Privacy Policy." });
-      else setErrors({ form: code === "network" ? "Rosetta's server isn't reachable. Is the backend running?" : "That didn't work. Check the details and try again." });
+      else setErrors({ form: code === "network" || code === "timeout" ? "Rosetta can't be reached right now. Check your connection and try again in a minute." : "That didn't work. Check the details and try again." });
       setSaving(false);
     }
   };
@@ -143,7 +143,7 @@ export function WorkspaceForm() {
         />
 
         {errors.form && (
-          <p role="alert" className="t-small font-medium text-fg-1">
+          <p role="alert" className="t-small font-medium text-danger">
             {errors.form}
           </p>
         )}

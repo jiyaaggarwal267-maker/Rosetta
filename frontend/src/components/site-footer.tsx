@@ -40,7 +40,7 @@ export function SiteFooter({ className }: { className?: string }) {
             <LogoMark size={20} />
             Rosetta
           </p>
-          <p className="mt-4 t-mono text-fg-3">Built for Devlympics 2026</p>
+          <p className="mt-4 t-mono text-fg-3">Built by Team CodeCrunchers</p>
           <p className="mt-1 t-mono text-fg-3">
             © {new Date().getFullYear()} {LEGAL_ENTITY}
           </p>

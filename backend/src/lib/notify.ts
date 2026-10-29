@@ -42,6 +42,9 @@ export const notifications = {
     notify({ orgId: o.orgId, userId: o.to, kind: "reply", title: `${o.fromName} replied: ${clip(o.subject)}`, href: `/app/questions/${o.ticketId}` }),
   change: (o: { orgId: string; to: string; authorName: string; title: string; cardId: string }) =>
     notify({ orgId: o.orgId, userId: o.to, kind: "change", title: `New from ${o.authorName}: ${clip(o.title, 70)}`, href: `/app/c/${o.cardId}` }),
+  /** To the engineer whose push was explained by itself. Kind "change", so existing bells show it. */
+  explained: (o: { orgId: string; to: string; repo: string; cardId: string }) =>
+    notify({ orgId: o.orgId, userId: o.to, kind: "change", title: `Your push to ${o.repo} was explained — review it`, href: `/app/c/${o.cardId}` }),
   reviewed: (o: { orgId: string; to: string; authorName: string; title: string; cardId: string }) =>
     notify({ orgId: o.orgId, userId: o.to, kind: "reviewed", title: `${o.authorName} reviewed “${clip(o.title, 60)}”`, href: `/app/c/${o.cardId}` }),
   joined: (o: { orgId: string; to: string; name: string }) =>

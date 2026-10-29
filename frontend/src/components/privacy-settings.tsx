@@ -232,7 +232,7 @@ export function DeleteAccount() {
           className={inputClass}
         />
         {error && (
-          <p id={`${ids.confirm}-error`} role="alert" className="t-small font-medium text-fg-1">
+          <p id={`${ids.confirm}-error`} role="alert" className="t-small font-medium text-danger">
             {error}
           </p>
         )}

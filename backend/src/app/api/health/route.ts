@@ -1,6 +1,5 @@
 import { env, isProduction } from "@/lib/env";
 import { json, preflight, route } from "@/lib/http";
-import { mailConfigured } from "@/lib/mail";
 import { storeKind } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -20,15 +19,15 @@ function warnings() {
   return out;
 }
 
-/** GET /api/health: what's configured, without revealing any keys. */
+/**
+ * GET /api/health: up or not, where data is kept, and deploy warnings (the
+ * deploy check in DEPLOY.md reads `store` and `warnings`). Which keys are set
+ * isn't listed, since anyone can call this.
+ */
 export const GET = route(async () =>
   json({
     ok: true,
     store: storeKind,
-    github: Boolean(env.githubToken),
-    gemini: Boolean(env.geminiKey),
-    fallback: Boolean(env.fallbackKey),
-    email: mailConfigured(),
     warnings: warnings(),
   }),
 );

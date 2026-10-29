@@ -366,7 +366,10 @@ function AskWhy() {
 /* ---------- 6. Promises ---------- */
 
 const PROMISES = [
-  { title: "The engineer stays in control", body: "Every card is a draft until the person who wrote the code approves it." },
+  {
+    title: "The engineer stays in control",
+    body: "Every card stays a draft until the person who wrote the code reviews it. Leads see drafts marked “Not reviewed yet”; clients only see reviewed work.",
+  },
   {
     title: "Your full code isn't kept",
     body: "Diffs are read from GitHub and sent to the AI to explain. Rosetta saves the explanation and a few lines behind each step, not the diff.",

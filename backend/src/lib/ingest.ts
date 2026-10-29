@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { aiConfigured } from "./ai/provider";
 import { explainChange } from "./ai/tasks";
-import { cardIdFor, demoSampleFor } from "./cards";
+import { demoSampleFor, resolveCardId } from "./cards";
 import { isPitchLink } from "./demo/pitch";
 import { diffText, findings as findingsFrom, trimFiles } from "./diff";
 import { env } from "./env";
@@ -11,7 +11,7 @@ import { ApiError } from "./http";
 import { sendNewChange } from "./mail";
 import { notifications } from "./notify";
 import { store } from "./store";
-import { evidenceFor, RETRY_BELOW, verify } from "./verify";
+import { evidenceFor, needsReview, RETRY_BELOW, verify } from "./verify";
 import type { Explanation, Org, StoredCard, User } from "./types";
 
 /**
@@ -48,9 +48,10 @@ export type Stage = "checking" | "rewriting";
 /**
  * Cached by repo@sha, so the same commit never calls the model twice.
  * Every new explanation is checked against the diff, and rewritten once
- * with the problems as feedback if it scores below the bar.
+ * with the problems as feedback if it scores below the bar. `orgId` charges
+ * the AI calls to that workspace's share of the daily quota.
  */
-export async function explanationFor(p: Prepared, onStage?: (stage: Stage) => void): Promise<Explanation> {
+export async function explanationFor(p: Prepared, onStage?: (stage: Stage) => void, orgId?: string): Promise<Explanation> {
   const { change, kept, truncated } = p;
   const cached = await store.get<Explanation>("explanations", cacheId(change.repo, change.headSha));
   if (cached) return cached;
@@ -59,8 +60,8 @@ export async function explanationFor(p: Prepared, onStage?: (stage: Stage) => vo
   if (!aiConfigured()) throw new ApiError("unavailable", "No AI key configured.");
 
   const files = kept.map((f) => f.filename);
-  const input = { repo: change.repo, message: change.message, files, diff: diffText(kept), truncated };
-  const check = { message: change.message, diff: input.diff, files: kept };
+  const input = { repo: change.repo, message: change.message, files, diff: diffText(kept), truncated, orgId };
+  const check = { message: change.message, diff: input.diff, files: kept, orgId };
 
   let best: Explanation = { ...(await explainChange(input)), files };
   onStage?.("checking");
@@ -84,7 +85,7 @@ export async function explanationFor(p: Prepared, onStage?: (stage: Stage) => vo
 
   const explanation: Explanation = {
     ...best,
-    verification: { ...checked, retried, needsReview: checked.score < RETRY_BELOW },
+    verification: { ...checked, retried, needsReview: needsReview(checked) },
     evidence: evidenceFor(best, kept),
   };
   await store.set("explanations", cacheId(change.repo, change.headSha), explanation);
@@ -97,7 +98,7 @@ export function toCard(
   p: Prepared,
   explanation: Explanation,
   users: User[],
-  opts: { createdBy?: string; source: StoredCard["source"] },
+  opts: { createdBy?: string; source: StoredCard["source"]; authorUserId?: string },
 ): StoredCard {
   const { change, kept, truncated } = p;
   return {
@@ -107,7 +108,7 @@ export function toCard(
     ref: change.ref,
     url: change.url,
     author: change.author,
-    authorUserId: authorFor(change.author.login, users)?.id,
+    authorUserId: opts.authorUserId ?? authorFor(change.author.login, users)?.id,
     committedAt: change.committedAt,
     status: "draft",
     files: kept.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions, url: f.blob_url })),
@@ -122,29 +123,56 @@ export function toCard(
   };
 }
 
-/** Explains a commit for a workspace in the background. Skips ones already done. */
-export async function ingestLink(org: Org, link: ParsedLink, users: User[], source: StoredCard["source"]) {
+/** A change that's deliberately not explained, e.g. a merge commit. Not an error: nothing to retry. */
+export class SkipChange extends Error {}
+
+/** Changes that arrive by themselves, rather than someone pasting a link. */
+const AUTOMATIC: StoredCard["source"][] = ["sync", "webhook", "push"];
+
+/**
+ * Explains a commit for a workspace in the background. Skips ones already done.
+ * `authorUserId` names the member when they were matched some other way than
+ * the commit's GitHub username (a verified account, their email, an alias).
+ */
+export async function ingestLink(
+  org: Org,
+  link: ParsedLink,
+  users: User[],
+  source: StoredCard["source"],
+  opts: { authorUserId?: string; skipMerges?: boolean } = {},
+) {
   // The pitch commit is only ever explained from its own fixed text, never from GitHub.
   if (isPitchLink(link)) return null;
-  const id = cardIdFor(org.id, link);
+  const id = await resolveCardId(org.id, link);
   if (await store.get<StoredCard>("cards", id)) return null;
   // Deleted on purpose: sync doesn't bring it back. Pasting the link again does.
   if (await store.get("deleted", id)) return null;
-  const prepared = prepare(await fetchChange(link));
-  const card = toCard(id, org, prepared, await explanationFor(prepared), users, { source });
+  const change = await fetchChange(link, org.id);
+  // A merge repeats work already explained commit by commit.
+  if (opts.skipMerges && (change.parents ?? 0) > 1) throw new SkipChange("merge commit");
+  const prepared = prepare(change);
+  const card = toCard(id, org, prepared, await explanationFor(prepared, undefined, org.id), users, { source, authorUserId: opts.authorUserId });
   await store.set("cards", id, card);
   const author = users.find((u) => u.id === card.authorUserId);
+  const automatic = AUTOMATIC.includes(source);
+  // The engineer hears that their push is ready to check before anyone relies on it.
+  if (author && automatic) {
+    await notifications.explained({ orgId: org.id, to: author.id, repo: card.repo, cardId: card.id });
+  }
   const manager = author && users.find((u) => u.id === author.managerId);
   if (author && manager) {
     await notifications.change({ orgId: org.id, to: manager.id, authorName: author.name, title: card.explanation.title, cardId: card.id });
-    await sendNewChange({
-      to: manager.email,
-      managerName: manager.name,
-      authorName: author.name,
-      title: card.explanation.title,
-      summary: card.explanation.levels[manager.role].summary,
-      cardId: card.id,
-    });
+    // Pushes can be many a day: a manager may turn their emails off and keep the bell.
+    if (!automatic || manager.notifyEmailOnPush !== false) {
+      await sendNewChange({
+        to: manager.email,
+        managerName: manager.name,
+        authorName: author.name,
+        title: card.explanation.title,
+        summary: card.explanation.levels[manager.role].summary,
+        cardId: card.id,
+      });
+    }
   }
   return card;
 }

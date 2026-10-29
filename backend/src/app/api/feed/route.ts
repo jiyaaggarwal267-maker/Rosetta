@@ -2,7 +2,8 @@ import { after } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { feedItem } from "@/lib/cards";
 import { json, preflight, route } from "@/lib/http";
-import { canSeeCard, descendants, orgMembers, personOf, requireOrg, teamOf, visibleAuthorIds } from "@/lib/org";
+import { drainDue, drainJobs } from "@/lib/jobs";
+import { canSeeCard, cardOwner, descendants, orgMembers, personOf, requireOrg, teamOf, visibleAuthorIds } from "@/lib/org";
 import { store } from "@/lib/store";
 import { syncIsStale, syncOrg } from "@/lib/sync";
 import type { Comment, StoredCard, Ticket } from "@/lib/types";
@@ -25,8 +26,10 @@ export const GET = route(async (req) => {
   const users = await orgMembers(org.id);
   const params = new URL(req.url).searchParams;
 
-  // New pushes arrive without anyone pasting a link.
+  // New pushes arrive without anyone pasting a link. Sync runs the explain
+  // queue when it's done; otherwise the queue gets a turn on its own, at most once a minute.
   if (syncIsStale(org)) after(() => syncOrg(org, users).catch(() => {}));
+  else if (drainDue(org.id)) after(() => drainJobs(org.id).catch(() => {}));
 
   const [cards, comments, tickets] = await Promise.all([
     store.list<StoredCard>("cards", "orgId", org.id),
@@ -35,13 +38,14 @@ export const GET = route(async (req) => {
   ]);
 
   const visible = cards.filter((c) => canSeeCard(me, c, users));
-  const owner = (c: StoredCard) => c.authorUserId ?? c.createdBy ?? "";
+  const owner = (c: StoredCard) => cardOwner(c) ?? "";
 
   let filtered = visible;
   const author = params.get("author");
   const team = params.get("team");
   const status = params.get("status");
-  if (author) filtered = filtered.filter((c) => owner(c) === author);
+  // By who wrote it; a removed member's cards don't count as their manager's.
+  if (author) filtered = filtered.filter((c) => (c.authorUserId ?? c.createdBy) === author);
   if (team) {
     const members = new Set([team, ...descendants(team, users).map((u) => u.id)]);
     filtered = filtered.filter((c) => members.has(owner(c)));

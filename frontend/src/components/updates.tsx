@@ -1,18 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import * as api from "@/lib/api";
 import { langFor } from "@/lib/lang";
+import { canOpen } from "@/lib/roles";
 import { useSession } from "@/lib/session";
 import type { CommentView, Feed, FeedItem } from "@/lib/types";
 import { timeAgo } from "@/lib/utils";
-import { Page } from "./app-shell";
-import { FeedCard, FilterChips, personChip } from "./feed";
+import { LoadError, NotForRole, Page } from "./app-shell";
+import { FeedCard, FilterChips, LoadMore, personChip } from "./feed";
 import { GitHubIcon } from "./icons";
 import { Avatar, PersonLine } from "./person";
 
 type Entry = { kind: "change"; at: string; item: FeedItem } | { kind: "comment"; at: string; item: CommentView };
+
+const PAGE = 50;
+const change = (item: FeedItem): Entry => ({ kind: "change", at: item.committedAt, item });
+const comment = (item: CommentView): Entry => ({ kind: "comment", at: item.createdAt, item });
+const sortEntries = (all: Entry[]) => all.sort((a, b) => b.at.localeCompare(a.at));
 
 const SHOW = [
   { id: "changes", label: "Changes" },
@@ -31,30 +38,62 @@ export function Updates() {
   const [show, setShow] = useState<string | null>(null);
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [filters, setFilters] = useState<Pick<Feed, "people" | "teams"> | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [page, setPage] = useState<Feed["page"] | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Bumped whenever the filters reload the list, so a "Show more" for the old filters is dropped.
+  const generation = useRef(0);
+  const allowed = user ? canOpen(user.role, "/app/updates") : false;
+  const who = { author: author ?? undefined, team: team ?? undefined };
 
   useEffect(() => {
+    if (!allowed) return;
     api.getFeed().then((f) => setFilters({ people: f.people, teams: f.teams })).catch(() => {});
-  }, []);
+  }, [allowed]);
 
   useEffect(() => {
+    if (!allowed) return;
     let current = true;
+    generation.current++;
+    setLoadingMore(false);
     setEntries(null);
+    setFailed(false);
     const who = { author: author ?? undefined, team: team ?? undefined };
-    Promise.all([
-      api.getFeed({ ...who, limit: "50" }).catch(() => null),
-      api.getComments(who).catch(() => null),
-    ]).then(([feed, comments]) => {
-      if (!current) return;
-      const all: Entry[] = [
-        ...(feed?.items ?? []).map((item) => ({ kind: "change" as const, at: item.committedAt, item })),
-        ...(comments?.items ?? []).map((item) => ({ kind: "comment" as const, at: item.createdAt, item })),
-      ];
-      setEntries(all.sort((a, b) => b.at.localeCompare(a.at)));
-    });
+    Promise.all([api.getFeed({ ...who, limit: String(PAGE) }), api.getComments(who)])
+      .then(([feed, comments]) => {
+        if (!current) return;
+        setPage(feed.page);
+        setEntries(sortEntries([...feed.items.map(change), ...comments.items.map(comment)]));
+      })
+      .catch(() => current && setFailed(true));
     return () => {
       current = false;
     };
-  }, [author, team]);
+  }, [author, team, allowed, attempt]);
+
+  // Older changes, a page at a time. Comments already arrive in full (newest 100).
+  const loadMore = async () => {
+    if (!page?.more || !entries) return;
+    const asked = generation.current;
+    setLoadingMore(true);
+    try {
+      const shown = entries.filter((e) => e.kind === "change").length;
+      const next = await api.getFeed({ ...who, limit: String(PAGE), offset: String(shown) });
+      if (asked !== generation.current) return;
+      setPage(next.page);
+      setEntries((all) => {
+        const have = new Set((all ?? []).filter((e) => e.kind === "change").map((e) => e.item.id));
+        return sortEntries([...(all ?? []), ...next.items.filter((i) => !have.has(i.id)).map(change)]);
+      });
+    } catch {
+      if (asked === generation.current) toast("Couldn't load more. Try again in a minute.");
+    } finally {
+      if (asked === generation.current) setLoadingMore(false);
+    }
+  };
+
+  if (user && !allowed) return <NotForRole title="Engineer updates" />;
 
   const people = (filters?.people ?? []).filter((p) => !team || p.team?.id === team);
   const visible = (entries ?? []).filter((e) => !show || (show === "changes" ? e.kind === "change" : e.kind === "comment"));
@@ -80,11 +119,13 @@ export function Updates() {
       </div>
 
       <div className="mt-8">
-        {!entries ? (
+        {failed ? (
+          <LoadError message="Updates can't load right now." onRetry={() => setAttempt((n) => n + 1)} />
+        ) : !entries ? (
           <p className="t-body text-fg-3" role="status">
             Loading…
           </p>
-        ) : visible.length === 0 ? (
+        ) : visible.length === 0 && (show === "comments" || !page?.more) ? (
           <div className="rounded-md p-8 shadow-ring">
             <p className="t-body font-medium text-fg-1">No updates here yet.</p>
             <p className="mt-1 t-small text-fg-2">
@@ -94,11 +135,16 @@ export function Updates() {
             </p>
           </div>
         ) : (
-          <ul className="grid max-w-[52rem] grid-cols-1 gap-3">
-            {visible.map((e) =>
-              e.kind === "change" ? <FeedCard key={`c-${e.item.id}`} item={e.item} /> : <CommentEntry key={`m-${e.item.id}`} c={e.item} />,
+          <div className="grid max-w-[52rem] gap-4">
+            <ul className="grid grid-cols-1 gap-3">
+              {visible.map((e) =>
+                e.kind === "change" ? <FeedCard key={`c-${e.item.id}`} item={e.item} /> : <CommentEntry key={`m-${e.item.id}`} c={e.item} />,
+              )}
+            </ul>
+            {page && show !== "comments" && (
+              <LoadMore page={page} shown={entries.filter((e) => e.kind === "change").length} loading={loadingMore} onMore={loadMore} />
             )}
-          </ul>
+          </div>
         )}
       </div>
     </Page>

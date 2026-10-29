@@ -7,7 +7,7 @@ import { fetchChange, type RawFile } from "@/lib/github";
 import type { ParsedLink } from "@/lib/github-url";
 import { ApiError, ndjson, pause, preflight, route } from "@/lib/http";
 import { prepare } from "@/lib/ingest";
-import { canSeeCard, orgMembers } from "@/lib/org";
+import { canReview, canSeeCard, isLead, isTechnical, orgMembers } from "@/lib/org";
 import { limit } from "@/lib/ratelimit";
 import { store } from "@/lib/store";
 import type { StoredCard, Verification } from "@/lib/types";
@@ -38,8 +38,11 @@ export const POST = route<Ctx>(async (req, { params }) => {
   if (!card || !canSeeCard(me, card, users)) throw new ApiError("not_found");
   limit(`check:${me.id}`, 30, 60 * 60_000);
 
+  // Like publicCard: the list of issues is for engineers and whoever can fix the card.
+  const shown = (v: Verification): Verification => (canReview(me, card) || isTechnical(me.role) ? v : { ...v, issues: [] });
+
   return ndjson(async (emit) => {
-    const step = async (key: string, run: () => Promise<{ detail: string; state?: "pass" | "warn" | "fail" }>) => {
+    const step =async (key: string, run: () => Promise<{ detail: string; state?: "pass" | "warn" | "fail" }>) => {
       emit({ type: "step", key, state: "running" });
       const [out] = await Promise.all([run(), pause(STEP_MS)]);
       emit({ type: "step", key, state: out.state ?? "pass", detail: out.detail });
@@ -49,7 +52,7 @@ export const POST = route<Ctx>(async (req, { params }) => {
     // Hand-written samples have no diff to check against.
     if (demoSampleFor(card.repo, card.headSha) && card.explanation.verification) {
       await step("read", async () => ({ detail: "Built-in sample: written and checked by hand" }));
-      return { type: "result", verification: card.explanation.verification };
+      return { type: "result", verification: shown(card.explanation.verification) };
     }
 
     const pitch = isPitchCommit(card.repo, card.headSha);
@@ -63,7 +66,7 @@ export const POST = route<Ctx>(async (req, { params }) => {
         const [owner, repo] = card.repo.split("/");
         const link: ParsedLink =
           card.ref.kind === "commit" ? { owner, repo, kind: "commit", sha: card.ref.sha } : { owner, repo, kind: "pull", number: card.ref.number };
-        const prepared = prepare(await fetchChange(link));
+        const prepared = prepare(await fetchChange(link, card.orgId));
         files = prepared.kept;
         message = prepared.change.message;
       }
@@ -75,7 +78,7 @@ export const POST = route<Ctx>(async (req, { params }) => {
     const evidence = evidenceFor(e, files);
     await step("evidence", async () => {
       const boxes = e.flow.after.nodes.filter((n) => n.kind !== "start" && n.kind !== "end");
-      const matched = boxes.filter((n) => evidence[n.key]).length;
+      const matched = boxes.filter((n) => Object.hasOwn(evidence, n.key)).length;
       return {
         detail: `Matched ${matched} of ${boxes.length} steps to lines in the diff`,
         state: boxes.length && matched / boxes.length < 0.3 ? "warn" : "pass",
@@ -97,7 +100,7 @@ export const POST = route<Ctx>(async (req, { params }) => {
 
     let judged: Judged | null = null;
     await step("judge", async () => {
-      judged = pitch ? PITCH_JUDGE : aiConfigured() ? await judgeCached(e, { message, diff: diffText(files) }) : null;
+      judged = pitch ? PITCH_JUDGE : aiConfigured() ? await judgeCached(e, { message, diff: diffText(files), orgId: card.orgId }) : null;
       return judged
         ? { detail: `Second model scored accuracy, completeness, flowchart and reader fit: ${(judged as Judged).score}/100` }
         : { detail: "Second model unavailable right now, so this uses the rules only", state: "warn" };
@@ -112,15 +115,30 @@ export const POST = route<Ctx>(async (req, { params }) => {
       checkedBy: j ? "ai" : "code",
       issues: [...issues, ...(j?.issues ?? [])].slice(0, 8),
       retried: e.verification?.retried ?? false,
-      needsReview: score < RETRY_BELOW,
+      // No second model scored it: flag it rather than show the rules-only number as a real score.
+      needsReview: score < RETRY_BELOW || !j,
       checkedAt: new Date().toISOString(),
     };
-    await store.set<StoredCard>("cards", card.id, { ...card, explanation: { ...e, verification, evidence } });
-    return { type: "result", verification };
+    // Clients see the result but don't change the stored score.
+    if (isTechnical(me.role) || isLead(me.role) || canReview(me, card)) {
+      // The card may have been reviewed or edited while this ran: re-read it and only
+      // save the score if the text checked is still the text stored.
+      const latest = await store.get<StoredCard>("cards", card.id);
+      if (latest && sameText(latest.explanation, e)) {
+        await store.set<StoredCard>("cards", card.id, { ...latest, explanation: { ...latest.explanation, verification, evidence } });
+      }
+    }
+    return { type: "result", verification: shown(verification) };
   });
 });
 
 function boxesUnmatched(e: StoredCard["explanation"], evidence: Record<string, unknown>, files: RawFile[]) {
   const steps = e.flow.after.nodes.filter((n) => n.kind !== "start" && n.kind !== "end");
-  return steps.length >= 3 && files.some((f) => f.patch) && steps.filter((n) => evidence[n.key]).length / steps.length < 0.3;
+  return steps.length >= 3 && files.some((f) => f.patch) && steps.filter((n) => Object.hasOwn(evidence, n.key)).length / steps.length < 0.3;
+}
+
+/** The same words and flowchart (the score and evidence aside). */
+function sameText(a: StoredCard["explanation"], b: StoredCard["explanation"]) {
+  const text = (e: StoredCard["explanation"]) => JSON.stringify([e.title, e.levels, e.flow, e.walkthrough]);
+  return text(a) === text(b);
 }

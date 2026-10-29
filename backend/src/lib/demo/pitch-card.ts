@@ -12,7 +12,8 @@ import { writePitchThread } from "./pitch-thread";
  * Explains the pitch commit for one workspace. Same answer every time, with
  * the full loading story (reading, findings, writing, checking) so it looks
  * and feels like a live explanation, and no GitHub or AI calls, so it can't
- * fail on stage. Pasting it again regenerates it fresh.
+ * fail on stage. Its author (or whoever explained it) pasting it again
+ * regenerates it fresh; /api/explain shows anyone else the existing card.
  */
 export async function explainPitch(cardId: string, org: Org, me: User, users: User[], emit: (line: object) => void) {
   emit({ type: "start", title: PITCH.reading });
@@ -26,9 +27,13 @@ export async function explainPitch(cardId: string, org: Org, me: User, users: Us
   emit({ type: "checking" });
   await pause(1600);
 
-  // Whoever pastes it as an engineer is the author, so it lands in their manager's feed.
-  const owner = isTechnical(me.role) ? me : users.find((u) => u.githubLogin?.toLowerCase() === PITCH.author.login);
+  // Whoever first pastes it as an engineer is the author, so it lands in their manager's feed.
+  // Regenerating keeps that author and creator; it never hands the card to someone else.
   const previous = await store.get<StoredCard>("cards", cardId);
+  const previousAuthor = previous?.authorUserId;
+  const owner =
+    (previousAuthor ? users.find((u) => u.id === previousAuthor) : undefined) ??
+    (isTechnical(me.role) ? me : users.find((u) => u.githubLogin?.toLowerCase() === PITCH.author.login));
   const now = Date.now();
   const card: StoredCard = {
     id: cardId,
@@ -45,7 +50,7 @@ export async function explainPitch(cardId: string, org: Org, me: User, users: Us
     headSha: PITCH.sha,
     reading: PITCH.reading,
     findings: PITCH.findings,
-    createdBy: me.id,
+    createdBy: previous?.createdBy ?? me.id,
     source: "manual",
     createdAt: new Date(now).toISOString(),
     // Readers' reports stay, so a reported mistake doesn't vanish on regenerate.
